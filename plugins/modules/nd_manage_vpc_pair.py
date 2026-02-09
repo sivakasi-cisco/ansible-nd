@@ -27,7 +27,7 @@ options:
         - replaced
         - deleted
         - overridden
-        - query
+        - gathered
         default: merged
         description:
         - The state of the vPC pair configuration after module completion.
@@ -38,7 +38,7 @@ options:
         - When true, automatically saves the configuration and then triggers a fabric deployment via POST to /api/v1/manage/fabrics/{fabric}/actions/deploy?forceShowRun=true
         - Configuration is saved via POST to /api/v1/manage/fabrics/{fabric}/actions/configSave before deployment.
         - Deployment only occurs if there are actual changes (diff is not empty), pending operations, or switches in transitional states.
-        - Cannot be used when state is 'query'.
+        - Cannot be used when state is 'gathered'.
         - Only applicable for states that modify configuration (merged, replaced, deleted, overridden).
         type: bool
         default: false
@@ -48,7 +48,7 @@ options:
         - Displays all API requests that would be sent, the diff of changes, and whether deployment would occur.
         - No actual configuration changes are made to the fabric.
         - Useful for validating configurations and understanding what operations would be performed.
-        - Cannot be used when state is 'query'.
+        - Cannot be used when state is 'gathered'.
         type: bool
         default: false
     config:
@@ -129,12 +129,12 @@ EXAMPLES = """
 # Query existing vPC pairs
 - name: Query all vPC pairs
   cisco.nd.nd_manage_vpc_pairs:
-    state: query
+    state: gathered
 
 # Query specific vPC pair
 - name: Query specific vPC pair
   cisco.nd.nd_manage_vpc_pairs:
-    state: query
+    state: gathered
     config:
       - peer1_switch_id: "FDO23040Q85"
         peer2_switch_id: "FDO23040Q86"
@@ -183,7 +183,7 @@ EXAMPLES = """
 # Dry run to check what deployment actions would be taken
 - name: Preview deployment actions only
   cisco.nd.nd_manage_vpc_pairs:
-    state: query
+    state: gathered
     deploy: true
     dry_run: true
 - name: Create vPC pair with deployment
@@ -263,10 +263,10 @@ warnings:
     type: list
     returned: when applicable
     sample: []
-query:
-    description: Current state of vPC pairs (only returned in query state). The pending_create_vpc_pairs and pending_delete_vpc_pairs keys are only included if there are items in those lists.
+gathered:
+    description: Current state of vPC pairs (only returned in gathered state). The pending_create_vpc_pairs and pending_delete_vpc_pairs keys are only included if there are items in those lists.
     type: dict
-    returned: when state is query
+    returned: when state is gathered
     sample: {
         "vpc_pairs": [
             {
@@ -327,7 +327,10 @@ from ansible_collections.cisco.nd.plugins.module_utils.nd import NDModule
 from ansible.module_utils.basic import missing_required_lib
 
 from ..module_utils.common.log import Log
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.model_playbook_vpc_pair import VpcPairModel
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.model_playbook_vpc_pair import NdVpcPairSchema
+
+# Alias for backward compatibility - using the nested schema's VpcPairBase as VpcPairModel
+VpcPairModel = NdVpcPairSchema.VpcPairBase
 
 try:
     from deepdiff import DeepDiff
@@ -337,6 +340,7 @@ except ImportError:
 else:
     HAS_DEEPDIFF = True
     DEEPDIFF_IMPORT_ERROR = None
+
 
 class UpdateInventory:
     """
@@ -384,6 +388,7 @@ class UpdateInventory:
         self.sw_sn_from_ip = {sw["fabricManagementIp"]: sw["serialNumber"] for sw in self.switches if "fabricManagementIp" in sw and "serialNumber" in sw}
         self.logger.info("Switch IP to Serial Number mapping: %s", self.sw_sn_from_ip)
 
+
 class GetHave:
     """
     Class to retrieve and process vPC pair state information from Nexus Dashboard (ND).
@@ -429,7 +434,7 @@ class GetHave:
 
         This method processes the switches from inventory to:
         1. Identify existing vPC pairs from switches with vpcConfigured=true
-        2. Track switches that are pending (not in vPC pairs)  
+        2. Track switches that are pending (not in vPC pairs)
         3. Track switch pairs that are in vPC but marked as pending
 
         Returns:
@@ -454,9 +459,9 @@ class GetHave:
             if switch_id in processed_switch_ids:
                 self.log.warning("Switch %s already processed", switch_id)
                 continue
-            
+
             other_peer = self.get_recommendation_details(switch_id)
-            self.log.debug("Other peer details: %s"% other_peer)
+            self.log.debug("Other peer details: %s" % other_peer)
 
             processed_switch_ids.add(switch_id)
 
@@ -469,39 +474,34 @@ class GetHave:
                 peer_switch_id = vpc_data.get("peerSwitchId")
                 # Mark both switches as processed to avoid duplicate entries
                 processed_switch_ids.add(peer_switch_id)
-                
-                # Create a VpcPairModel to get consistent pair key
+
+                # Create a VpcPairModel (VpcPairBase from nested schema) to get consistent pair key
                 temp_vpc_pair_data = {
-                    "peer1SwitchId": switch_id,
-                    "peer2SwitchId": peer_switch_id,
+                    "switchId": switch_id,
+                    "peerSwitchId": peer_switch_id,
                     "useVirtualPeerLink": False,  # Default to False, will be updated later if needed
                 }
-                temp_vpc_pair = VpcPairModel.get_model(temp_vpc_pair_data)
+                temp_vpc_pair = NdVpcPairSchema.VpcPairBase(**temp_vpc_pair_data)
                 if not other_peer:
                     self.pending_delete_vpc_pairs.append(temp_vpc_pair)
                 else:
                     # old 3.2 api uses useVirtualPeerlink instead of useVirtualPeerLink (case sensitive)
-                    self.log.debug("useVirtualPeerLink updated: %s"%other_peer.get("useVirtualPeerlink"))
-                    temp_vpc_pair.useVirtualPeerLink = other_peer.get("useVirtualPeerlink", False)
+                    self.log.debug("useVirtualPeerLink updated: %s" % other_peer.get("useVirtualPeerlink"))
+                    temp_vpc_pair.use_virtual_peer_link = other_peer.get("useVirtualPeerlink", False)
                     self.have.append(temp_vpc_pair)
             elif other_peer:
 
                 peer_switch_id = other_peer.get("serialNumber")
                 # Mark both switches as processed to avoid duplicate entries
                 processed_switch_ids.add(peer_switch_id)
-                
-                temp_vpc_pair_data = {
-                    "peer1SwitchId": switch_id,
-                    "peer2SwitchId": peer_switch_id,
-                    "useVirtualPeerLink": other_peer.get("useVirtualPeerLink", False)
-                }
-                self.pending_create_vpc_pairs.append(VpcPairModel.get_model(temp_vpc_pair_data))
+
+                temp_vpc_pair_data = {"switchId": switch_id, "peerSwitchId": peer_switch_id, "useVirtualPeerLink": other_peer.get("useVirtualPeerLink", False)}
+                self.pending_create_vpc_pairs.append(NdVpcPairSchema.VpcPairBase(**temp_vpc_pair_data))
 
             self.log.debug("have: %s" % self.have)
             self.log.debug("pending_delete: %s" % self.pending_delete_vpc_pairs)
             self.log.debug("pending_create: %s" % self.pending_create_vpc_pairs)
 
-        
     def get_recommendation_details(self, switchId):
         """
         Helper function to get recommendation details for a switch.
@@ -526,6 +526,7 @@ class GetHave:
                 return sw
         return None
 
+
 class Common:
     """
     Common utility class that provides shared functionality for all state operations in the Cisco ND vPC pair module.
@@ -540,7 +541,7 @@ class Common:
     Attributes:
         modiresult (dict): Dictionary to store operation results including changed state, diffs, API responses and warnings.
         task_params (dict): Parameters provided from the Ansible task.
-        state (str): The desired state operation (merged, replaced, deleted, overridden, or query).
+        state (str): The desired state operation (merged, replaced, deleted, overridden, or gathered).
         requests (dict): Container for API request requests.
         have (list): List of VpcPairModel objects representing the current state of vPC pairs.
         query (list): List for storing query results.
@@ -577,8 +578,6 @@ class Common:
         self.log.debug(msg)
         self.validate_task_params()
 
-
-
     def validate_task_params(self):
         """
         Validates and processes task parameters to create vPC pair model objects.
@@ -596,31 +595,50 @@ class Common:
         self.log.debug(msg)
 
         if not self.task_params.get("config"):
-            return 
+            return
 
         # check if we need to only work with switches in the fabric
         unique_switches_want = set()
         for vpc_pair in self.task_params.get("config", []):
             try:
-                validated_config = VpcPairModel.get_model(
-                    vpc_pair, 
-                    state=self.state, 
-                    extra="forbid",
-                    sw_sn_from_ip=self.inventory.sw_sn_from_ip
-                )
+                # Convert playbook input to API format for validation
+                # Handle IP to serial number conversion
+                vpc_pair_data = vpc_pair.copy()
+
+                # Convert field names from playbook format to API format if needed
+                if "peer1_switch_id" in vpc_pair_data:
+                    vpc_pair_data["switchId"] = vpc_pair_data.pop("peer1_switch_id")
+                if "peer2_switch_id" in vpc_pair_data:
+                    vpc_pair_data["peerSwitchId"] = vpc_pair_data.pop("peer2_switch_id")
+                if "use_virtual_peer_link" in vpc_pair_data:
+                    vpc_pair_data["useVirtualPeerLink"] = vpc_pair_data.pop("use_virtual_peer_link")
+
+                # Convert IP addresses to serial numbers if mapping is provided
+                if self.inventory.sw_sn_from_ip:
+                    if "switchId" in vpc_pair_data:
+                        original_peer1 = vpc_pair_data["switchId"]
+                        vpc_pair_data["switchId"] = self.inventory.sw_sn_from_ip.get(original_peer1, original_peer1)
+
+                    if "peerSwitchId" in vpc_pair_data:
+                        original_peer2 = vpc_pair_data["peerSwitchId"]
+                        vpc_pair_data["peerSwitchId"] = self.inventory.sw_sn_from_ip.get(original_peer2, original_peer2)
+
+                # Use the nested schema for validation
+                validated_config = NdVpcPairSchema.VpcPairBase(**vpc_pair_data)
+
             except ValueError as error:
                 self.nd.fail_json(msg=f"Invalid vPC pair configuration: {str(error)}")
-            
-            # Check uniqueness after Pydantic validation
-            if validated_config.peer2SwitchId and validated_config.peer2SwitchId in unique_switches_want:
-                self.nd.fail_json(msg=f"Switch IDs must be unique across vPC pairs: {validated_config.peer2SwitchId}")
-            if validated_config.peer2SwitchId:
-                unique_switches_want.add(validated_config.peer2SwitchId)
 
-            if validated_config.peer1SwitchId in unique_switches_want:
-                self.nd.fail_json(msg=f"Switch IDs must be unique across vPC pairs: {validated_config.peer1SwitchId}")
-            unique_switches_want.add(validated_config.peer1SwitchId)
-            
+            # Check uniqueness after Pydantic validation
+            if validated_config.peer_switch_id and validated_config.peer_switch_id in unique_switches_want:
+                self.nd.fail_json(msg=f"Switch IDs must be unique across vPC pairs: {validated_config.peer_switch_id}")
+            if validated_config.peer_switch_id:
+                unique_switches_want.add(validated_config.peer_switch_id)
+
+            if validated_config.switch_id in unique_switches_want:
+                self.nd.fail_json(msg=f"Switch IDs must be unique across vPC pairs: {validated_config.switch_id}")
+            unique_switches_want.add(validated_config.switch_id)
+
             self.want.append(validated_config)
 
         self.log.debug("Processed vPC pair configurations: %s", self.want)
@@ -648,13 +666,21 @@ class Common:
         if not switch_id_2:
             for vpc_pair in vpc_pair_list:
                 vpc_pair_dict = vpc_pair.model_dump()
-                peers = [vpc_pair_dict["peer1SwitchId"], vpc_pair_dict["peer2SwitchId"]]
+                # Handle both old field names and new field names from nested schema
+                peers = [
+                    vpc_pair_dict.get("switchId") or vpc_pair_dict.get("switch_id"),
+                    vpc_pair_dict.get("peerSwitchId") or vpc_pair_dict.get("peer_switch_id"),
+                ]
                 if switch_id_1 in peers:
                     return vpc_pair
         else:
             for vpc_pair in vpc_pair_list:
                 vpc_pair_dict = vpc_pair.model_dump()
-                peers = [vpc_pair_dict["peer1SwitchId"], vpc_pair_dict["peer2SwitchId"]]
+                # Handle both old field names and new field names from nested schema
+                peers = [
+                    vpc_pair_dict.get("switchId") or vpc_pair_dict.get("switch_id"),
+                    vpc_pair_dict.get("peerSwitchId") or vpc_pair_dict.get("peer_switch_id"),
+                ]
                 if switch_id_1 in peers and switch_id_2 in peers:
                     return vpc_pair
         return None
@@ -662,10 +688,10 @@ class Common:
     def validate_no_switch_conflicts(self):
         """
         Validate that neither switch in vpc_pair want is present in a vpc_pair with another switch in have.
-        
+
         This ensures that switches are not being added to conflicting vPC pairs.
         A switch can only be part of one vPC pair at a time.
-        
+
         Raises:
             ValueError: If any switches in want are already part of different vPC pairs in have.
                        Contains all conflicts found, not just the first one.
@@ -679,31 +705,28 @@ class Common:
         conflicts = []  # Collect all conflicts before raising error
 
         for want_vpc_pair in self.want:
-            want_switches = {want_vpc_pair.peer1SwitchId, want_vpc_pair.peer2SwitchId}
-            
+            want_switches = {want_vpc_pair.switch_id, want_vpc_pair.peer_switch_id}
+
             for have_vpc_pair in self.have:
-                have_switches = {have_vpc_pair.peer1SwitchId, have_vpc_pair.peer2SwitchId}
-                
+                have_switches = {have_vpc_pair.switch_id, have_vpc_pair.peer_switch_id}
+
                 # Check if the wanted vPC pair is exactly the same as an existing one
                 if want_switches == have_switches:
                     # Same vPC pair exists, this is fine for all operations
                     self.log.debug("vPC pair %s already exists in have state", want_vpc_pair.get_switch_pair_key())
                     break
-                
+
                 # Check for switch conflicts - any switch overlap with different pairs
                 switch_overlap = want_switches & have_switches
                 if switch_overlap:
-                    conflicting_switches = ', '.join(switch_overlap)
+                    conflicting_switches = ", ".join(switch_overlap)
                     want_key = want_vpc_pair.get_switch_pair_key()
                     have_key = have_vpc_pair.get_switch_pair_key()
-                    
-                    conflict_msg = (
-                        f"Switch(es) {conflicting_switches} in wanted vPC pair {want_key} "
-                        f"are already part of existing vPC pair {have_key}"
-                    )
+
+                    conflict_msg = f"Switch(es) {conflicting_switches} in wanted vPC pair {want_key} " f"are already part of existing vPC pair {have_key}"
                     conflicts.append(conflict_msg)
                     self.log.error("Switch conflict detected: %s", conflict_msg)
-        
+
         # Raise a single error with all conflicts if any were found
         if conflicts:
             error_msg = (
@@ -713,20 +736,20 @@ class Common:
             )
             self.log.error(error_msg)
             self.nd.fail_json(msg=error_msg)
-        
+
         self.log.debug("No switch conflicts found in vpc pairs validation")
 
     def save_fabric_config(self):
         """
         Save the fabric configuration before deploying changes.
-        
+
         This method sends a POST request to the fabric config save endpoint to save
         the current configuration state. This should be called before deploying
         configuration changes.
-        
+
         Returns:
             dict: Response from the config save API call
-            
+
         Raises:
             Exception: If the config save operation fails
         """
@@ -734,34 +757,30 @@ class Common:
         method_name = inspect.stack()[0][3]
         msg = f"ENTERED: {self.class_name}.{method_name}"
         self.log.debug(msg)
-        
-        # Don't save if state is query
-        if self.state == "query":
-            self.log.debug("Skipping config save for query state")
+
+        # Don't save if state is gathered
+        if self.state == "gathered":
+            self.log.debug("Skipping config save for gathered state")
             return None
-            
+
         # Don't save if deploy parameter is False (no need to save if we're not deploying)
         if not self.deploy:
             self.log.debug("Deploy parameter is False, skipping config save")
             return None
-            
+
         config_save_path = f"/api/v1/manage/fabrics/{self.fabric}/actions/configSave"
         self.log.info(f"Saving fabric configuration via: {config_save_path}")
-        
+
         try:
             response = self.nd.request(config_save_path, method="POST", data={})
             self.log.debug("Config save response: %s", response)
-            
+
             # Store config save response with additional context
-            config_save_response_entry = {
-                "operation": "CONFIG_SAVE",
-                "path": config_save_path, 
-                "response": response
-            }
+            config_save_response_entry = {"operation": "CONFIG_SAVE", "path": config_save_path, "response": response}
             self.result["response"].append(config_save_response_entry)
-            
+
             return response
-            
+
         except Exception as error:
             error_msg = f"Failed to save fabric configuration: {str(error)}"
             self.log.error(error_msg)
@@ -770,13 +789,13 @@ class Common:
     def needs_deployment(self):
         """
         Determine if deployment is needed based on current state and changes.
-        
+
         Deployment is needed if any of the following conditions are met:
         1. There are items in the diff (actual configuration changes were made)
         2. There are pending create vPC pairs (switches ready to be paired)
         3. There are pending delete vPC pairs (switches ready to be unpaired)
         4. There are any requests in the requests dictionary (operations to be performed)
-        
+
         Returns:
             bool: True if deployment is needed, False otherwise
         """
@@ -784,47 +803,44 @@ class Common:
         method_name = inspect.stack()[0][3]
         msg = f"ENTERED: {self.class_name}.{method_name}"
         self.log.debug(msg)
-        
+
         # Check if there are any changes in the diff
-        has_diff_changes = any(
-            self.result.get("diff", {}).get(operation, [])
-            for operation in ["POST", "PUT", "DELETE"]
-        )
-        
+        has_diff_changes = any(self.result.get("diff", {}).get(operation, []) for operation in ["POST", "PUT", "DELETE"])
+
         # Check if there are pending operations
         has_pending_create = bool(self.pending_create_vpc_pairs)
         has_pending_delete = bool(self.pending_delete_vpc_pairs)
-        
+
         # Check if there are any API requests to be made
         has_requests = bool(self.requests)
-        
+
         self.log.debug(f"Deployment needs assessment:")
         self.log.debug(f"  - Has diff changes: {has_diff_changes}")
         self.log.debug(f"  - Has pending create pairs: {has_pending_create} (count: {len(self.pending_create_vpc_pairs)})")
         self.log.debug(f"  - Has pending delete pairs: {has_pending_delete} (count: {len(self.pending_delete_vpc_pairs)})")
         self.log.debug(f"  - Has API requests: {has_requests} (count: {len(self.requests)})")
-        
+
         deployment_needed = has_diff_changes or has_pending_create or has_pending_delete or has_requests
-        
+
         self.log.info(f"Deployment needed: {deployment_needed}")
         return deployment_needed
 
     def deploy_fabric(self):
         """
         Deploy the fabric configuration changes after applying vPC pair operations.
-        
+
         This method first checks if deployment is actually needed based on:
         - Presence of configuration changes (diff)
         - Pending create/delete vPC pairs
         - Any API requests that were made
-        
-        If deployment is needed, it saves the current configuration and then sends a POST request 
-        to the fabric deploy endpoint. It should only be called after all other vPC pair operations 
+
+        If deployment is needed, it saves the current configuration and then sends a POST request
+        to the fabric deploy endpoint. It should only be called after all other vPC pair operations
         have been completed successfully.
-        
+
         Returns:
             dict: Response from the deploy API call, or None if deployment is not needed
-            
+
         Raises:
             Exception: If the config save or deploy operation fails
         """
@@ -832,46 +848,42 @@ class Common:
         method_name = inspect.stack()[0][3]
         msg = f"ENTERED: {self.class_name}.{method_name}"
         self.log.debug(msg)
-        
-        # Don't deploy if state is query
-        if self.state == "query":
-            self.log.debug("Skipping deploy for query state")
+
+        # Don't deploy if state is gathered
+        if self.state == "gathered":
+            self.log.debug("Skipping deploy for gathered state")
             return None
-            
+
         # Don't deploy if deploy parameter is False
         if not self.deploy:
             self.log.debug("Deploy parameter is False, skipping deployment")
             return None
-        
+
         # Check if deployment is actually needed
         if not self.needs_deployment():
             self.log.info("No configuration changes or pending operations detected, skipping deployment")
             return None
-        
+
         # Save configuration before deploying
         self.log.info("Configuration changes detected, saving fabric configuration before deployment")
         self.save_fabric_config()
-            
+
         deploy_path = f"/api/v1/manage/fabrics/{self.fabric}/actions/deploy?forceShowRun=true"
         self.log.info(f"Deploying fabric configuration changes via: {deploy_path}")
-        
+
         try:
             response = self.nd.request(deploy_path, method="POST", data={})
             self.log.debug("Deploy response: %s", response)
-            
+
             # Store deploy response with additional context
-            deploy_response_entry = {
-                "operation": "DEPLOY",
-                "path": deploy_path, 
-                "response": response
-            }
+            deploy_response_entry = {"operation": "DEPLOY", "path": deploy_path, "response": response}
             self.result["response"].append(deploy_response_entry)
-            
+
             # Mark as changed if deploy was triggered
             self.result["changed"] = True
-            
+
             return response
-            
+
         except Exception as error:
             error_msg = f"Failed to deploy fabric configuration: {str(error)}"
             self.log.error(error_msg)
@@ -880,7 +892,7 @@ class Common:
     def show_dry_run_deployment_info(self):
         """
         Show what deployment actions would be taken in dry run mode.
-        
+
         This method evaluates whether deployment would occur and provides
         detailed information about the deployment decision factors without
         actually performing the deployment.
@@ -889,31 +901,30 @@ class Common:
         method_name = inspect.stack()[0][3]
         msg = f"ENTERED: {self.class_name}.{method_name}"
         self.log.debug(msg)
-        
+
         deployment_needed = self.needs_deployment()
-        
+
         deployment_info = {
             "would_deploy": deployment_needed,
             "deployment_decision_factors": {
                 "diff_has_changes": bool(self.result.get("diff", {}).get("after") != self.result.get("diff", {}).get("before")),
                 "pending_operations": bool(self.pending_create_vpc_pairs or self.pending_delete_vpc_pairs),
-                "api_requests_generated": bool(self.result.get("response", []))
-            }
+                "api_requests_generated": bool(self.result.get("response", [])),
+            },
         }
-        
+
         if deployment_needed:
             deployment_info["planned_actions"] = [
                 f"POST /api/v1/manage/fabrics/{self.fabric}/actions/configSave",
-                f"POST /api/v1/manage/fabrics/{self.fabric}/actions/deploy?forceShowRun=true"
+                f"POST /api/v1/manage/fabrics/{self.fabric}/actions/deploy?forceShowRun=true",
             ]
             self.log.info("DRY RUN: Would deploy fabric configuration changes")
         else:
             deployment_info["reason_skipped"] = "No changes detected (diff empty, no pending operations, no API requests)"
             self.log.info("DRY RUN: Would skip deployment - no changes detected")
-        
+
         # Store deployment info in result
         self.result["deployment"] = deployment_info
-
 
 
 class Merged:
@@ -947,6 +958,10 @@ class Merged:
         self.log = logger or logging.getLogger(f"nd.{self.class_name}")
         self.common = common_util
 
+        # NEW: Unified path template for 4.2 API
+        self.path_template = "/fabrics/{fabric}/switches/{switchId}/vpcPair"
+        self.verb = "PUT"  # Always PUT with 4.2 API
+
         msg = "ENTERED Merged(): "
         msg += f"state: {self.common.state}, "
         self.log.debug(msg)
@@ -955,19 +970,16 @@ class Merged:
         self.build_request()
         self.log.debug("Payload request built: %s", self.payload_request)
 
-
-
     def build_request(self):
         """
-        Build API request payloads for vPC pairs using DeepDiff.
+        Build API request payloads using 4.2 unified PUT endpoint.
 
-        This method compares want vs have states using DeepDiff and creates payloads
-        containing only the changed items. For new vPC pairs (not in have), the full
-        payload is created. For existing pairs, only changed fields are included.
+        All operations (create and update) use PUT with vpcAction="pair".
+        The API automatically determines if it's a create or update.
 
         Returns:
-            None: Updates self.payload_request with diff-based payloads
-        
+            None: Updates self.common.requests with request configurations
+
         Raises:
             ValueError: If a switch in want is already part of a different vPC pair in have
         """
@@ -982,53 +994,153 @@ class Merged:
 
         for want_vpc_pair in self.common.want:
             vpc_pair_key = want_vpc_pair.get_switch_pair_key()
-            
-            # Start with empty payload
-            payload = {}
-            
-            # Find corresponding vPC pair in have (if it exists)
-            have_vpc_pair = self.common.get_pair_from_switches(
-                self.common.have, 
-                want_vpc_pair.peer1SwitchId, 
-                want_vpc_pair.peer2SwitchId
-            )
-            
-            if not have_vpc_pair:
-                # New vPC pair - use full payload from want
-                payload = want_vpc_pair.to_api_payload()
-                path = f"/api/v1/manage/fabrics/{self.common.fabric}/vpcPairs"
-                verb = "POST"
-                self.log.debug("New vPC pair %s - using full payload", vpc_pair_key)
-            else:
-                # Existing vPC pair - use DeepDiff to find changes
-                self.log.debug("Existing vPC pair %s - calculating diff payload", vpc_pair_key)
-                
-                # # Convert models to dicts for DeepDiff
-                # have_dict = have_vpc_pair.model_dump() if hasattr(have_vpc_pair, 'model_dump') else have_vpc_pair.dict()
-                # want_dict = want_vpc_pair.model_dump() if hasattr(want_vpc_pair, 'model_dump') else want_vpc_pair.dict()
-                
-                # Use DeepDiff to calculate differences
-                diff = DeepDiff(have_vpc_pair, want_vpc_pair, ignore_order=True, view="tree")
 
-                if not diff:
-                    self.log.debug("No differences found for vPC pair %s - skipping", vpc_pair_key)
+            # Find corresponding vPC pair in have (if it exists)
+            have_vpc_pair = self.common.get_pair_from_switches(self.common.have, want_vpc_pair.switch_id, want_vpc_pair.peer_switch_id)
+
+            # Determine if changes are needed
+            if have_vpc_pair:
+                # Existing pair - check if update is needed
+                if self._is_update_needed(want_vpc_pair, have_vpc_pair):
+                    operation_type = "update"
+                    self.log.info(f"vPC pair {vpc_pair_key} exists but needs update")
+                else:
+                    # No changes needed - skip
+                    self.log.debug(f"vPC pair {vpc_pair_key} is already in desired state - skipping")
                     continue
-                
-                self.log.debug("DeepDiff result for %s: %s", vpc_pair_key, diff)
-                payload = { "useVirtualPeerLink": want_vpc_pair.useVirtualPeerLink }
-                path = f"/api/v1/manage/fabrics/{self.common.fabric}/switches/{want_vpc_pair.peer1SwitchId}/vpcPairs"
-                verb = "PUT"  # Existing pair, so we use PUT
-            
-            # Only add to payload_request if payload is not empty
-            if payload:
-                self.log.debug("Adding payload for vPC pair %s: %s", vpc_pair_key, payload)
-                self.common.requests[vpc_pair_key] = {
-                    "verb": verb,
-                    "path": path,
-                    "payload": payload
-                }
             else:
-                self.log.debug("Empty payload for vPC pair %s as it is present in have - skipping", vpc_pair_key)
+                # New pair
+                operation_type = "create"
+                self.log.info(f"vPC pair {vpc_pair_key} does not exist - will create")
+
+            # NEW: Build 4.2 API payload with vpcAction discriminator
+            payload = self._build_vpc_pair_payload(want_vpc_pair)
+
+            # NEW: Unified path - always uses switch-level endpoint with PUT
+            path = self.path_template.format(fabric=self.common.fabric, switchId=want_vpc_pair.switch_id)
+
+            self.log.debug(f"Operation: {operation_type}, Path: {path}, Payload: {json.dumps(payload, indent=2)}")
+
+            # Add to requests dict
+            self.common.requests[vpc_pair_key] = {
+                "verb": self.verb,  # Always "PUT"
+                "path": path,
+                "payload": payload,
+                "operation": operation_type,  # For logging/debugging
+            }
+
+        self.log.info(f"Built {len(self.common.requests)} vPC pair request(s)")
+
+    def _build_vpc_pair_payload(self, vpc_pair_model):
+        """
+        Build the 4.2 API payload for pairing a VPC.
+
+        Constructs payload according to OpenAPI spec with vpcAction
+        discriminator and optional template details.
+
+        Args:
+            vpc_pair_model: VpcPairModel instance with configuration
+
+        Returns:
+            dict: Complete payload for PUT request in 4.2 format
+        """
+        # NEW: Base payload with vpcAction discriminator and updated field names
+        # Use the VpcPairingRequest schema to build the payload
+        pairing_data = {
+            "vpcAction": "pair",
+            "switchId": vpc_pair_model.switch_id,
+            "peerSwitchId": vpc_pair_model.peer_switch_id,
+            "useVirtualPeerLink": vpc_pair_model.use_virtual_peer_link,
+        }
+
+        # Add vpcPairDetails if present in the model
+        if vpc_pair_model.vpc_pair_details:
+            pairing_data["vpcPairDetails"] = vpc_pair_model.vpc_pair_details
+
+        # Validate using VpcPairingRequest schema and convert to dict
+        try:
+            pairing_request = NdVpcPairSchema.VpcPairingRequest(**pairing_data)
+            payload = pairing_request.model_dump(by_alias=True, exclude_none=True, mode="json")
+        except Exception as e:
+            self.log.warning(f"Failed to validate with VpcPairingRequest schema: {e}, using raw payload")
+            payload = pairing_data
+
+        # NEW: Add template configuration if provided
+        template_config = self._get_template_config(vpc_pair_model)
+        if template_config:
+            payload["vpcPairDetails"] = template_config
+            self.log.debug(f"Added vpcPairDetails to payload: {json.dumps(template_config, indent=2)}")
+
+        return payload
+
+    def _get_template_config(self, vpc_pair_model):
+        """
+        Extract template configuration from VPC pair model if present.
+
+        Supports both default and custom template types:
+        - default: Standard parameters (domainId, keepAliveVrf, etc.)
+        - custom: User-defined template with custom fields
+
+        Args:
+            vpc_pair_model: VpcPairModel instance
+
+        Returns:
+            dict: Template configuration or None if not provided
+        """
+        # Check if model has template configuration
+        if not hasattr(vpc_pair_model, "template_config"):
+            return None
+
+        template_config = vpc_pair_model.template_config
+        if not template_config:
+            return None
+
+        template_type = getattr(vpc_pair_model, "template_type", "default")
+
+        if template_type == "custom":
+            # Custom template format
+            template_name = getattr(vpc_pair_model, "template_name", None)
+            if not template_name:
+                self.log.warning("Custom template type specified but template_name is missing")
+                return None
+            return {"type": "custom", "templateName": template_name, "templateConfig": template_config}
+        else:
+            # Default template format - merge type with config
+            result = {"type": "default"}
+            result.update(template_config)
+            return result
+
+    def _is_update_needed(self, want, have):
+        """
+        Determine if an update is needed by comparing want and have.
+
+        Uses DeepDiff for intelligent comparison that handles:
+        - Field additions
+        - Value changes
+        - Nested structure changes
+
+        Args:
+            want: Desired VPC pair configuration
+            have: Current VPC pair configuration
+
+        Returns:
+            bool: True if update is needed, False if already in desired state
+        """
+        try:
+            # Use DeepDiff to calculate differences
+            diff = DeepDiff(have, want, ignore_order=True, view="tree")
+
+            if diff:
+                self.log.debug(f"Configuration differences detected: {diff}")
+                return True
+            else:
+                self.log.debug("No configuration differences detected")
+                return False
+
+        except Exception as e:
+            # Fallback to simple comparison if DeepDiff fails
+            self.log.warning(f"DeepDiff comparison failed: {e}, using simple comparison")
+            return want != have
 
 
 class Replaced:
@@ -1058,6 +1170,10 @@ class Replaced:
         self.log = logger or logging.getLogger(f"nd.{self.class_name}")
         self.common = common_util
 
+        # NEW: Unified path template for 4.2 API
+        self.path_template = "/fabrics/{fabric}/switches/{switchId}/vpcPair"
+        self.verb = "PUT"  # Always PUT with 4.2 API
+
         msg = "ENTERED Replaced(): "
         msg += f"state: {self.common.state}, "
         self.log.debug(msg)
@@ -1068,17 +1184,16 @@ class Replaced:
 
     def build_request(self):
         """
-        Build API request payloads for vPC pairs using DeepDiff.
+        Build API request payloads using 4.2 unified PUT endpoint.
 
-        This method compares want vs have states using DeepDiff and creates payloads
-        containing only the changed items. For new vPC pairs (not in have), the full
-        payload is created. For existing pairs, only changed fields are included.
+        All operations (create and update) use PUT with vpcAction="pair".
+        The API automatically determines if it's a create or update.
 
         This implementation is identical to the Merged class behavior.
 
         Returns:
-            None: Updates self.common.requests with diff-based payloads
-        
+            None: Updates self.common.requests with request configurations
+
         Raises:
             ValueError: If a switch in want is already part of a different vPC pair in have
         """
@@ -1093,49 +1208,153 @@ class Replaced:
 
         for want_vpc_pair in self.common.want:
             vpc_pair_key = want_vpc_pair.get_switch_pair_key()
-            
-            # Start with empty payload
-            payload = {}
-            
-            # Find corresponding vPC pair in have (if it exists)
-            have_vpc_pair = self.common.get_pair_from_switches(
-                self.common.have, 
-                want_vpc_pair.peer1SwitchId, 
-                want_vpc_pair.peer2SwitchId
-            )
-            
-            if not have_vpc_pair:
-                # New vPC pair - use full payload from want
-                payload = want_vpc_pair.to_api_payload()
-                path = f"/api/v1/manage/fabrics/{self.common.fabric}/vpcPairs"
-                verb = "POST"
-                self.log.debug("New vPC pair %s - using full payload", vpc_pair_key)
-            else:
-                # Existing vPC pair - use DeepDiff to find changes
-                self.log.debug("Existing vPC pair %s - calculating diff payload", vpc_pair_key)
-                
-                # Use DeepDiff to calculate differences
-                diff = DeepDiff(have_vpc_pair, want_vpc_pair, ignore_order=True, view="tree")
 
-                if not diff:
-                    self.log.debug("No differences found for vPC pair %s - skipping", vpc_pair_key)
+            # Find corresponding vPC pair in have (if it exists)
+            have_vpc_pair = self.common.get_pair_from_switches(self.common.have, want_vpc_pair.switch_id, want_vpc_pair.peer_switch_id)
+
+            # Determine if changes are needed
+            if have_vpc_pair:
+                # Existing pair - check if update is needed
+                if self._is_update_needed(want_vpc_pair, have_vpc_pair):
+                    operation_type = "update"
+                    self.log.info(f"vPC pair {vpc_pair_key} exists but needs update")
+                else:
+                    # No changes needed - skip
+                    self.log.debug(f"vPC pair {vpc_pair_key} is already in desired state - skipping")
                     continue
-                
-                self.log.debug("DeepDiff result for %s: %s", vpc_pair_key, diff)
-                payload = { "useVirtualPeerLink": want_vpc_pair.useVirtualPeerLink }
-                path = f"/api/v1/manage/fabrics/{self.common.fabric}/switches/{want_vpc_pair.peer1SwitchId}/vpcPairs"
-                verb = "PUT"  # Existing pair, so we use PUT
-            
-            # Only add to payload_request if payload is not empty
-            if payload:
-                self.log.debug("Adding payload for vPC pair %s: %s", vpc_pair_key, payload)
-                self.common.requests[vpc_pair_key] = {
-                    "verb": verb,
-                    "path": path,
-                    "payload": payload
-                }
             else:
-                self.log.debug("Empty payload for vPC pair %s as it is present in have - skipping", vpc_pair_key)
+                # New pair
+                operation_type = "create"
+                self.log.info(f"vPC pair {vpc_pair_key} does not exist - will create")
+
+            # NEW: Build 4.2 API payload with vpcAction discriminator
+            payload = self._build_vpc_pair_payload(want_vpc_pair)
+
+            # NEW: Unified path - always uses switch-level endpoint with PUT
+            path = self.path_template.format(fabric=self.common.fabric, switchId=want_vpc_pair.switch_id)
+
+            self.log.debug(f"Operation: {operation_type}, Path: {path}, Payload: {json.dumps(payload, indent=2)}")
+
+            # Add to requests dict
+            self.common.requests[vpc_pair_key] = {
+                "verb": self.verb,  # Always "PUT"
+                "path": path,
+                "payload": payload,
+                "operation": operation_type,  # For logging/debugging
+            }
+
+        self.log.info(f"Built {len(self.common.requests)} vPC pair request(s)")
+
+    def _build_vpc_pair_payload(self, vpc_pair_model):
+        """
+        Build the 4.2 API payload for pairing a VPC.
+
+        Constructs payload according to OpenAPI spec with vpcAction
+        discriminator and optional template details.
+
+        Args:
+            vpc_pair_model: VpcPairModel instance with configuration
+
+        Returns:
+            dict: Complete payload for PUT request in 4.2 format
+        """
+        # NEW: Base payload with vpcAction discriminator and updated field names
+        # Use the VpcPairingRequest schema to build the payload
+        pairing_data = {
+            "vpcAction": "pair",
+            "switchId": vpc_pair_model.switch_id,
+            "peerSwitchId": vpc_pair_model.peer_switch_id,
+            "useVirtualPeerLink": vpc_pair_model.use_virtual_peer_link,
+        }
+
+        # Add vpcPairDetails if present in the model
+        if vpc_pair_model.vpc_pair_details:
+            pairing_data["vpcPairDetails"] = vpc_pair_model.vpc_pair_details
+
+        # Validate using VpcPairingRequest schema and convert to dict
+        try:
+            pairing_request = NdVpcPairSchema.VpcPairingRequest(**pairing_data)
+            payload = pairing_request.model_dump(by_alias=True, exclude_none=True, mode="json")
+        except Exception as e:
+            self.log.warning(f"Failed to validate with VpcPairingRequest schema: {e}, using raw payload")
+            payload = pairing_data
+
+        # NEW: Add template configuration if provided
+        template_config = self._get_template_config(vpc_pair_model)
+        if template_config:
+            payload["vpcPairDetails"] = template_config
+            self.log.debug(f"Added vpcPairDetails to payload: {json.dumps(template_config, indent=2)}")
+
+        return payload
+
+    def _get_template_config(self, vpc_pair_model):
+        """
+        Extract template configuration from VPC pair model if present.
+
+        Supports both default and custom template types:
+        - default: Standard parameters (domainId, keepAliveVrf, etc.)
+        - custom: User-defined template with custom fields
+
+        Args:
+            vpc_pair_model: VpcPairModel instance
+
+        Returns:
+            dict: Template configuration or None if not provided
+        """
+        # Check if model has template configuration
+        if not hasattr(vpc_pair_model, "template_config"):
+            return None
+
+        template_config = vpc_pair_model.template_config
+        if not template_config:
+            return None
+
+        template_type = getattr(vpc_pair_model, "template_type", "default")
+
+        if template_type == "custom":
+            # Custom template format
+            template_name = getattr(vpc_pair_model, "template_name", None)
+            if not template_name:
+                self.log.warning("Custom template type specified but template_name is missing")
+                return None
+            return {"type": "custom", "templateName": template_name, "templateConfig": template_config}
+        else:
+            # Default template format - merge type with config
+            result = {"type": "default"}
+            result.update(template_config)
+            return result
+
+    def _is_update_needed(self, want, have):
+        """
+        Determine if an update is needed by comparing want and have.
+
+        Uses DeepDiff for intelligent comparison that handles:
+        - Field additions
+        - Value changes
+        - Nested structure changes
+
+        Args:
+            want: Desired VPC pair configuration
+            have: Current VPC pair configuration
+
+        Returns:
+            bool: True if update is needed, False if already in desired state
+        """
+        try:
+            # Use DeepDiff to calculate differences
+            diff = DeepDiff(have, want, ignore_order=True, view="tree")
+
+            if diff:
+                self.log.debug(f"Configuration differences detected: {diff}")
+                return True
+            else:
+                self.log.debug("No configuration differences detected")
+                return False
+
+        except Exception as e:
+            # Fallback to simple comparison if DeepDiff fails
+            self.log.warning(f"DeepDiff comparison failed: {e}, using simple comparison")
+            return want != have
 
 
 class Deleted:
@@ -1173,7 +1392,7 @@ class Deleted:
         self.path = "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair?serialNumber={peer1SwitchId}"
 
         # Create a list of vPC pair keys to be deleted that are in both self.common.want and self.have
-        
+
         # self.delete_vpc_pair_keys = []
         # for want_vpc_pair in self.common.want:
         #     have_vpc_pair = self.common.vpc_pair_in_have(want_vpc_pair.peer1_switch_id, want_vpc_pair.peer2_switch_id)
@@ -1197,7 +1416,7 @@ class Deleted:
     def _process_vpc_pair_deletions(self, vpc_pairs_to_delete, overview_path, pending_vpc_pairs_to_delete):
         """
         Helper method to process vPC pair deletions with validation checks.
-        
+
         Args:
             vpc_pairs_to_delete (list): List of vPC pairs to delete
             overview_path (str): API path template for overview checks
@@ -1212,12 +1431,12 @@ class Deleted:
                 continue
 
             self.log.debug(f"Preparing deletion for vPC pair: {vpc_pair_key}")
-            
+
             response = self.common.nd.request(
-                overview_path.format(switchId=vpc_pair.peer1SwitchId),
+                overview_path.format(switchId=vpc_pair.switch_id),
                 method="GET",
             )
-            self.log.debug("vPC pair overview request: %s", overview_path.format(switchId=vpc_pair.peer1SwitchId))
+            self.log.debug("vPC pair overview request: %s", overview_path.format(switchId=vpc_pair.switch_id))
             self.log.debug("vPC pair overview response: %s", json.dumps(response, indent=2))
             if not response.get("overlayBase"):
                 self.common.nd.fail_json(
@@ -1235,11 +1454,8 @@ class Deleted:
                     self.common.nd.fail_json(
                         msg=f"vPC pair {vpc_pair_key} cannot be deleted because it is in use by {count} VRFs. Detach these VRFs first, maybe using the VRFs module.",
                     )
-            
-            self.common.requests[vpc_pair_key] = {
-                "verb": self.verb,
-                "path": self.path.format(peer1SwitchId=vpc_pair.peer1SwitchId)
-            }
+
+            self.common.requests[vpc_pair_key] = {"verb": self.verb, "path": self.path.format(peer1SwitchId=vpc_pair.switch_id)}
 
     def collect_deletion_requests(self):
         """
@@ -1248,7 +1464,7 @@ class Deleted:
         This method compares the desired state (want) with the current state (have)
         and identifies vPC pairs that exist in both lists, preparing them for deletion.
         It also handles pending create and pending delete lists according to the following rules:
-        
+
         1. If a pair exists in pending_create which is not in deleted wants, add that to results
         2. If a pair is pending deleted, but is not mentioned in deleted wants, add that to results in a separate list
         3. If a pair is already in the pending deleted state and is in deleted want, remove from want and add to normal result
@@ -1279,11 +1495,7 @@ class Deleted:
         else:
             # prints existing pending creates that do not get deleted (deploy will create these)
             for pending_create_pair in self.common.pending_create_vpc_pairs:
-                found_pair = self.common.get_pair_from_switches(
-                    self.common.want,
-                    pending_create_pair.peer1SwitchId,
-                    pending_create_pair.peer2SwitchId
-                )
+                found_pair = self.common.get_pair_from_switches(self.common.want, pending_create_pair.switch_id, pending_create_pair.peer_switch_id)
                 if not found_pair:
                     self.log.debug(f"Pending create vPC pair {pending_create_pair.get_switch_pair_key()} not in delete wants, adding to separate results list")
                     self.common.result["pending_create_pairs_not_in_delete"].append(pending_create_pair.model_dump())
@@ -1292,11 +1504,7 @@ class Deleted:
 
             # prints existing pending deletes not in request (deploy will delete these)
             for pending_delete_pair in self.common.pending_delete_vpc_pairs:
-                found_pair = self.common.get_pair_from_switches(
-                    self.common.want, 
-                    pending_delete_pair.peer1SwitchId, 
-                    pending_delete_pair.peer2SwitchId
-                )
+                found_pair = self.common.get_pair_from_switches(self.common.want, pending_delete_pair.switch_id, pending_delete_pair.peer_switch_id)
 
                 if not found_pair:
                     self.log.debug(f"Pending delete vPC pair {pending_delete_pair.get_switch_pair_key()} not in delete wants, adding to separate results list")
@@ -1304,14 +1512,10 @@ class Deleted:
 
             # Find vPC pairs that exist in both filtered_want and have
             for vpc_pair in self.common.want:
-                found_pair = self.common.get_pair_from_switches(
-                    self.common.have, 
-                    vpc_pair.peer1SwitchId, 
-                    vpc_pair.peer2SwitchId
-                )
+                found_pair = self.common.get_pair_from_switches(self.common.have, vpc_pair.switch_id, vpc_pair.peer_switch_id)
                 if found_pair:
                     vpc_pairs_to_delete.append(vpc_pair)
-   
+
         # Process the deletions using the helper method
         self._process_vpc_pair_deletions(vpc_pairs_to_delete, overview_path, pending_vpc_pairs_to_delete)
 
@@ -1370,12 +1574,8 @@ class Overridden:
         vpc_pairs_to_delete = []
         for have_vpc_pair in self.common.have:
             # Check if this have_vpc_pair exists in the want list
-            found_in_want = self.common.get_pair_from_switches(
-                self.common.want,
-                have_vpc_pair.peer1SwitchId,
-                have_vpc_pair.peer2SwitchId
-            )
-            
+            found_in_want = self.common.get_pair_from_switches(self.common.want, have_vpc_pair.switch_id, have_vpc_pair.peer_switch_id)
+
             if not found_in_want:
                 vpc_pairs_to_delete.append(have_vpc_pair)
                 self.log.debug(f"vPC pair {have_vpc_pair.get_switch_pair_key()} found in have but not in want - marking for deletion")
@@ -1383,14 +1583,14 @@ class Overridden:
         # Use Deleted class to handle the deletion of unwanted vPC pairs
         if vpc_pairs_to_delete:
             self.log.debug(f"Creating temporary want list with {len(vpc_pairs_to_delete)} vPC pairs to delete")
-            
+
             # Create a temporary common instance with the vPC pairs to delete as 'want'
             temp_common = copy.deepcopy(self.common)
             temp_common.want = vpc_pairs_to_delete
-            
+
             # Use Deleted class to handle the deletions
             delete_handler = Deleted(common_util=temp_common)
-            
+
             # Merge the deletion requests from the delete_handler into our main requests
             for vpc_pair_key, request_data in delete_handler.common.requests.items():
                 # Prefix deletion requests to avoid conflicts with creation/update requests
@@ -1406,26 +1606,26 @@ class Overridden:
             # The replaced_handler will have already populated self.common.requests with the replace operations
 
 
-class Query:
+class Gathered:
     """
-    Query class for managing vPC pair queries in Cisco ND.
+    Gathered class for managing vPC pair state retrieval in Cisco ND.
 
-    This class handles querying operations for vPC pair management in the Cisco Nexus Dashboard.
+    This class handles gathered operations for vPC pair management in the Cisco Nexus Dashboard.
     It provides functionality to retrieve and return vPC pair state information.
 
     Args:
         task_params: The Ansible task_params context containing configuration parameters
-        have_state: The current state of the vPC pairs being queried
+        have_state: The current state of the vPC pairs being gathered
 
     Attributes:
         class_name (str): The name of the current class
-        log (logging.Logger): Logger instance for the Query class
+        log (logging.Logger): Logger instance for the Gathered class
         common (Common): Common utility instance for shared operations
         have: The current have state of the vPC pairs
 
     Note:
         This class is part of the Cisco ND Ansible collection for vPC pair management
-        operations and follows the standard query pattern for state retrieval.
+        operations and follows the standard gathered pattern for state retrieval.
     """
 
     def __init__(self, common_util=None, logger=None):
@@ -1433,16 +1633,16 @@ class Query:
         self.log = logger or logging.getLogger(f"nd.{self.class_name}")
         self.common = common_util
 
-        msg = "ENTERED Query(): "
+        msg = "ENTERED Gathered(): "
         msg += f"state: {self.common.state}, "
         self.log.debug(msg)
-    
-    def get_query_results(self):
+
+    def get_gathered_results(self):
         """
         Retrieve the current state of vPC pairs including pending create and delete lists when they contain items.
 
         This method collects the current state of vPC pairs from the have state
-        and prepares it for output in the query result format. It conditionally includes
+        and prepares it for output in the gathered result format. It conditionally includes
         separate lists for pending create and delete vpc pairs only if they contain items.
 
         When no specific search criteria (want) is provided, all vPC pairs are returned.
@@ -1450,7 +1650,7 @@ class Query:
 
         Returns:
             dict: A dictionary containing:
-                - query: A nested dictionary with:
+                - gathered: A nested dictionary with:
                     - vpc_pairs: List of active vPC pair configurations (always present, may be empty)
                     - pending_create_vpc_pairs: List of vPC pairs pending creation (only if items exist)
                     - pending_delete_vpc_pairs: List of vPC pairs pending deletion (only if items exist)
@@ -1459,23 +1659,19 @@ class Query:
         method_name = inspect.stack()[0][3]  # pylint: disable=unused-variable
         msg = f"ENTERED: {self.class_name}.{method_name}"
         self.log.debug(msg)
-        
+
         # Initialize result dictionary with vpc_pairs (always present)
-        results = {
-            "query": {
-                "vpc_pairs": []
-            }
-        }
-        
+        results = {"gathered": {"vpc_pairs": []}}
+
         if not self.common.want:
             # Return all vPC pairs when no specific search criteria provided
-            results["query"]["vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in self.common.have]
-            
+            results["gathered"]["vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in self.common.have]
+
             # Only add pending lists if they contain items
             if self.common.pending_create_vpc_pairs:
-                results["query"]["pending_create_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in self.common.pending_create_vpc_pairs]
+                results["gathered"]["pending_create_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in self.common.pending_create_vpc_pairs]
             if self.common.pending_delete_vpc_pairs:
-                results["query"]["pending_delete_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in self.common.pending_delete_vpc_pairs]
+                results["gathered"]["pending_delete_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in self.common.pending_delete_vpc_pairs]
         else:
             # Search for specific vPC pairs in have, pending_create, and pending_delete lists
             # Also filter pending lists based on want criteria
@@ -1486,53 +1682,51 @@ class Query:
             for item in self.common.want:
                 item_dict = item.model_dump()
                 found_vpc_pair = None
-                
+
                 # Search in have list
-                if item_dict.get("peer2SwitchId", None):
-                    found_vpc_pair = self.common.get_pair_from_switches(
-                        self.common.have, item_dict["peer1SwitchId"], item_dict["peer2SwitchId"])
+                # Handle both old and new field names
+                peer1_id = item_dict.get("switchId") or item_dict.get("peer1SwitchId")
+                peer2_id = item_dict.get("peerSwitchId") or item_dict.get("peer2SwitchId")
+
+                if peer2_id:
+                    found_vpc_pair = self.common.get_pair_from_switches(self.common.have, peer1_id, peer2_id)
                 else:
-                    found_vpc_pair = self.common.get_pair_from_switches(
-                        self.common.have, item_dict["peer1SwitchId"])
-                
+                    found_vpc_pair = self.common.get_pair_from_switches(self.common.have, peer1_id)
+
                 if found_vpc_pair:
                     query_filtered.append(found_vpc_pair)
                     continue
-                
+
                 # If not found in have, search in pending_create list
-                if item_dict.get("peer2SwitchId", None):
-                    found_vpc_pair = self.common.get_pair_from_switches(
-                        self.common.pending_create_vpc_pairs, item_dict["peer1SwitchId"], item_dict["peer2SwitchId"])
+                if peer2_id:
+                    found_vpc_pair = self.common.get_pair_from_switches(self.common.pending_create_vpc_pairs, peer1_id, peer2_id)
                 else:
-                    found_vpc_pair = self.common.get_pair_from_switches(
-                        self.common.pending_create_vpc_pairs, item_dict["peer1SwitchId"])
-                
+                    found_vpc_pair = self.common.get_pair_from_switches(self.common.pending_create_vpc_pairs, peer1_id)
+
                 if found_vpc_pair:
                     pending_create_filtered.append(found_vpc_pair)
                     continue
-                
+
                 # If not found in have or pending_create, search in pending_delete list
-                if item_dict.get("peer2SwitchId", None):
-                    found_vpc_pair = self.common.get_pair_from_switches(
-                        self.common.pending_delete_vpc_pairs, item_dict["peer1SwitchId"], item_dict["peer2SwitchId"])
+                if peer2_id:
+                    found_vpc_pair = self.common.get_pair_from_switches(self.common.pending_delete_vpc_pairs, peer1_id, peer2_id)
                 else:
-                    found_vpc_pair = self.common.get_pair_from_switches(
-                        self.common.pending_delete_vpc_pairs, item_dict["peer1SwitchId"])
-                
+                    found_vpc_pair = self.common.get_pair_from_switches(self.common.pending_delete_vpc_pairs, peer1_id)
+
                 if found_vpc_pair:
                     pending_delete_filtered.append(found_vpc_pair)
-            
+
             # Set filtered lists in nested structure - vpc_pairs always present
-            results["query"]["vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in query_filtered]
-            
+            results["gathered"]["vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in query_filtered]
+
             # Only add pending lists if they contain filtered items
             if pending_create_filtered:
-                results["query"]["pending_create_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in pending_create_filtered]
+                results["gathered"]["pending_create_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in pending_create_filtered]
             if pending_delete_filtered:
-                results["query"]["pending_delete_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in pending_delete_filtered]
-        
+                results["gathered"]["pending_delete_vpc_pairs"] = [vpc_pair.model_dump() for vpc_pair in pending_delete_filtered]
+
         return results
-        
+
 
 def main():
     argument_spec = {}
@@ -1560,12 +1754,12 @@ def main():
         module.fail_json(msg=missing_required_lib("deepdiff"), exception=DEEPDIFF_IMPORT_ERROR)
 
     # Validate that deploy is not used with query state
-    if module.params.get("state") == "query" and module.params.get("deploy"):
-        module.fail_json(msg="Deploy parameter cannot be used with 'query' state")
+    if module.params.get("state") == "gathered" and module.params.get("deploy"):
+        module.fail_json(msg="Deploy parameter cannot be used with 'gathered' state")
 
     # Validate that dry_run is not used with query state
-    if module.params.get("state") == "query" and module.params.get("dry_run"):
-        module.fail_json(msg="Dry_run parameter cannot be used with 'query' state")
+    if module.params.get("state") == "gathered" and module.params.get("dry_run"):
+        module.fail_json(msg="Dry_run parameter cannot be used with 'gathered' state")
 
     # Logging setup
     try:
@@ -1611,8 +1805,8 @@ def main():
             task = Deleted(common_util=vpc_pairs)
         elif task_params.get("state") == "overridden":
             task = Overridden(common_util=vpc_pairs)
-        elif task_params.get("state") == "query":
-            task = Query(common_util=vpc_pairs)
+        elif task_params.get("state") == "gathered":
+            task = Gathered(common_util=vpc_pairs)
         if task is None:
             module.fail_json(f"Invalid state: {task_params['state']}")
     except ValueError as error:
@@ -1620,12 +1814,12 @@ def main():
 
     #     # If the task is a query, we will just return the have state
     task.common.result["ip_to_sn_mapping"] = task.common.inventory.sw_sn_from_ip
-    if isinstance(task, Query):
+    if isinstance(task, Gathered):
         # for vpc_pair in vpc_pairs.have:
         #     task.common.query.append(vpc_pair.model_dump(by_alias=True))
-        query_results = task.get_query_results()
+        query_results = task.get_gathered_results()
         task.common.result.update(query_results)
-        
+
         task.common.result["changed"] = False
         module.exit_json(**task.common.result)
 
@@ -1639,21 +1833,18 @@ def main():
             payload = request_data.get("payload", {})
             mainlog.debug("Processing request for vPC pair key: %s", vpc_pair_key)
             mainlog.debug("Verb: %s, Path: %s, Payload: %s", verb, path, payload)
-            
+
             # Add payload/config to diff grouped by operation type
-            if verb in ["POST", "PUT", "DELETE"]:
+            if verb in ["PUT", "DELETE"]:
                 # Ensure the operation key exists in diff
                 if verb not in task.common.result["diff"]:
                     task.common.result["diff"][verb] = []
-                
+
                 if verb == "DELETE":
                     # For DELETE operations, extract switch IDs from vpc_pair_key or path
                     switch_ids = vpc_pair_key.replace("delete_", "").split("-")
                     if len(switch_ids) >= 2:
-                        delete_config = {
-                            "peer1SwitchId": switch_ids[0],
-                            "peer2SwitchId": switch_ids[1]
-                        }
+                        delete_config = {"peer1SwitchId": switch_ids[0], "peer2SwitchId": switch_ids[1]}
                     else:
                         # Fallback: try to extract from path or use vpc_pair_key
                         delete_config = {"vpc_pair_key": vpc_pair_key}
@@ -1662,28 +1853,21 @@ def main():
                     # For PUT operations, include switch IDs along with the payload
                     switch_ids = vpc_pair_key.replace("delete_", "").split("-")
                     if len(switch_ids) >= 2 and payload:
-                        put_config = {
-                            "peer1SwitchId": switch_ids[0],
-                            "peer2SwitchId": switch_ids[1]
-                        }
+                        put_config = {"peer1SwitchId": switch_ids[0], "peer2SwitchId": switch_ids[1]}
                         # Merge the payload into the config
                         put_config.update(payload)
                         task.common.result["diff"][verb].append(put_config)
                     elif payload:
                         # Fallback: just use payload if switch IDs can't be extracted
                         task.common.result["diff"][verb].append(payload)
-                else:
-                    # For POST, use the actual payload (which should already include switch IDs)
-                    if payload:
-                        task.common.result["diff"][verb].append(payload)
-            
+
             # Pretty-print the payload for easier log reading
             pretty_payload = json.dumps(payload, indent=2, sort_keys=True)
-            
+
             if task.common.dry_run:
                 # In dry run mode, don't make actual API calls but log what would be done
                 mainlog.info("DRY RUN: Would call nd.request with path: %s, verb: %s, and payload:\n%s", path, verb, pretty_payload)
-                
+
                 # Store dry run request information
                 response_entry = {
                     "vpc_pair_key": vpc_pair_key,
@@ -1691,44 +1875,38 @@ def main():
                     "path": path,
                     "payload": payload,
                     "dry_run": True,
-                    "response": "DRY RUN - No actual API call made"
+                    "response": "DRY RUN - No actual API call made",
                 }
             else:
                 # Normal mode - make actual API request
                 mainlog.info("Calling nd.request with path: %s, verb: %s, and payload:\n%s", path, verb, pretty_payload)
-                
+
                 # Make the API request
                 response = nd.request(path, method=verb, data=payload if payload else None)
                 mainlog.debug("Response from nd.request: %s", response)
-                
+
                 # Store response with additional context
-                response_entry = {
-                    "vpc_pair_key": vpc_pair_key,
-                    "operation": verb,
-                    "path": path,
-                    "response": response
-                }
-            
+                response_entry = {"vpc_pair_key": vpc_pair_key, "operation": verb, "path": path, "response": response}
+
             task.common.result["response"].append(response_entry)
-            
+
             # Only mark as changed if not in dry run mode
             if not task.common.dry_run:
                 task.common.result["changed"] = True
     else:
         mainlog.info("No requests to process")
 
-    # Deploy fabric changes if deploy parameter is True and state is not query
-    if task.common.deploy and task.common.state != "query":
+    # Deploy fabric changes if deploy parameter is True and state is not gathered
+    if task.common.deploy and task.common.state != "gathered":
         if task.common.dry_run:
             mainlog.info("DRY RUN: Showing deployment information without executing")
             task.common.show_dry_run_deployment_info()
         else:
             mainlog.info("Deploy parameter is True, deploying fabric configuration changes")
             task.common.deploy_fabric()
-    
+
     module.exit_json(**task.common.result)
 
 
 if __name__ == "__main__":
     main()
-
