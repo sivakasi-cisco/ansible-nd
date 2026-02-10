@@ -1,381 +1,867 @@
+# -*- coding: utf-8 -*-
+
+# Copyright: (c) 2025, Neil John (@neijohn) <neijohn@cisco.com>
+
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+
 from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
-__copyright__ = "Copyright (c) 2025 Cisco and/or its affiliates."
-__author__ = "Neil John"
 
 """
-Validation model for cisco.nd.nd_manage_vpc_pair playbooks.
+Pydantic models for VPC pair management in Nexus Dashboard 4.x API.
+
+This module provides comprehensive models covering all 34 OpenAPI schemas
+organized into functional domains:
+- Configuration Domain: VPC pairing and lifecycle management
+- Inventory Domain: VPC pair listing and discovery
+- Monitoring Domain: Health, status, and operational metrics
+- Consistency Domain: Configuration consistency validation
+- Validation Domain: Support checks and peer recommendations
 """
-import logging
+
+from abc import ABC, abstractmethod
+from pydantic import BaseModel, ConfigDict, Field, BeforeValidator
+from typing import List, Dict, Any, Optional, Union, Tuple, ClassVar, Literal, Annotated
+from typing_extensions import Self
 from enum import Enum
-from typing import Optional
 
-# Logging setup
-try:
-    from ...common.log import Log
-    log = Log()
-    log.commit()
-    mainlog = logging.getLogger("nd.vpc_pair_model")
-except (ImportError, ValueError) as error:
-    # Raise module error if Log class is not available or relative import fails
-    raise ImportError(f"Failed to initialize logging for VPC pair model: {error}") from error
+# ============================================================================
+# TYPE COERCION HELPERS
+# ============================================================================
 
-# This try-except block is used to handle the import of Pydantic.
-# If Pydantic is not available, it will define a minimal BaseModel class
-# and related functions to ensure compatibility with existing code.
-#
-# This is used to satisfy the ansible sanity test requirements
-try:
-    from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-except ImportError as imp_exc:
-    PYDANTIC_IMPORT_ERROR = imp_exc
 
-    # If Pydantic is not available, define a minimal BaseModel and related functions
-    # Reference: https://docs.ansible.com/ansible-core/2.17/dev_guide/testing/sanity/import.html
-    class BaseModel:
+def coerce_str_to_int(data):
+    """Convert string to int, handle None."""
+    if data is None:
+        return None
+    if isinstance(data, str):
+        if data.strip() and data.lstrip("-").isdigit():
+            return int(data)
+        raise ValueError(f"Cannot convert '{data}' to int")
+    return int(data)
+
+
+def coerce_to_bool(data):
+    """Convert various formats to bool."""
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return data.lower() in ("true", "1", "yes", "on")
+    return bool(data)
+
+
+def coerce_list_of_str(data):
+    """Ensure data is a list of strings."""
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return [item.strip() for item in data.split(",") if item.strip()]
+    if isinstance(data, list):
+        return [str(item) for item in data]
+    return data
+
+
+# Type aliases for flexible validation
+FlexibleInt = Annotated[int, BeforeValidator(coerce_str_to_int)]
+FlexibleBool = Annotated[bool, BeforeValidator(coerce_to_bool)]
+FlexibleListStr = Annotated[List[str], BeforeValidator(coerce_list_of_str)]
+
+
+# ============================================================================
+# BASE CLASSES
+# ============================================================================
+
+
+class NDVpcPairBaseModel(BaseModel, ABC):
+    """
+    Base model for VPC pair objects with identifiers.
+
+    Similar to NDBaseModel from base.py but specific to VPC pair resources.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, use_enum_values=True, validate_assignment=True, populate_by_name=True, extra="ignore")
+
+    # Subclasses MUST define these
+    identifiers: ClassVar[List[str]] = []
+    identifier_strategy: ClassVar[Literal["single", "composite", "hierarchical"]] = "composite"
+
+    # Optional: fields to exclude from diffs
+    exclude_from_diff: ClassVar[List[str]] = []
+
+    @abstractmethod
+    def to_payload(self) -> Dict[str, Any]:
+        """Convert model to API payload format."""
         pass
 
-    def ConfigDict(*args, **kwargs):
-        return dict(*args, **kwargs)
+    @classmethod
+    @abstractmethod
+    def from_response(cls, response: Dict[str, Any]) -> Self:
+        """Create model instance from API response."""
+        pass
 
-    def Field(*args, **kwargs):
-        return None
-
-    def field_validator(*args, **kwargs):
+    def get_identifier_value(self) -> Union[str, int, Tuple[Any, ...]]:
         """
-        A placeholder for field_validator to maintain compatibility with Pydantic.
-        This will not perform any validation but allows the code to run without errors.
+        Extract identifier value(s) from this instance.
+
+        For VPC pairs, uses composite strategy with (switchId, peerSwitchId).
         """
+        if not self.identifiers:
+            raise ValueError(f"{self.__class__.__name__} has no identifiers defined")
 
-        def decorator(func):
-            return func
+        if self.identifier_strategy == "single":
+            value = getattr(self, self.identifiers[0], None)
+            if value is None:
+                raise ValueError(f"Single identifier field '{self.identifiers[0]}' is None")
+            return value
 
-        return decorator
+        elif self.identifier_strategy == "composite":
+            values = []
+            missing = []
 
-    def model_validator(*args, **kwargs):
+            for field in self.identifiers:
+                value = getattr(self, field, None)
+                if value is None:
+                    missing.append(field)
+                values.append(value)
+
+            if missing:
+                raise ValueError(f"Composite identifier fields {missing} are None. All required: {self.identifiers}")
+
+            return tuple(values)
+
+        elif self.identifier_strategy == "hierarchical":
+            for field in self.identifiers:
+                value = getattr(self, field, None)
+                if value is not None:
+                    return (field, value)
+
+            raise ValueError(f"No non-None value in hierarchical fields {self.identifiers}")
+
+        else:
+            raise ValueError(f"Unknown identifier strategy: {self.identifier_strategy}")
+
+    def get_switch_pair_key(self) -> str:
         """
-        A placeholder for model_validator to maintain compatibility with Pydantic.
-        This will not perform any validation but allows the code to run without errors.
+        Generate a unique key for VPC pair (sorted switch IDs).
+
+        Returns:
+            str: Unique identifier in format "switchId1-switchId2"
         """
+        if self.identifier_strategy != "composite" or len(self.identifiers) != 2:
+            raise ValueError("get_switch_pair_key only works with composite strategy and 2 identifiers")
 
-        def decorator(func):
-            return func
+        values = self.get_identifier_value()
+        sorted_ids = sorted([str(v) for v in values])
+        return f"{sorted_ids[0]}-{sorted_ids[1]}"
 
-        return decorator
+    def to_diff_dict(self) -> Dict[str, Any]:
+        """Export for diff comparison (excludes sensitive fields)."""
+        return self.model_dump(by_alias=True, exclude_none=True, exclude=set(self.exclude_from_diff))
 
-else:
-    PYDANTIC_IMPORT_ERROR = None
+
+class NDVpcPairNestedModel(BaseModel):
+    """
+    Base for nested VPC pair models without identifiers.
+
+    Similar to NDNestedModel from base.py.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, use_enum_values=True, validate_assignment=True, populate_by_name=True, extra="ignore")
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Convert model to API payload format."""
+        return self.model_dump(by_alias=True, exclude_none=True)
+
+    @classmethod
+    def from_response(cls, response: Dict[str, Any]) -> Self:
+        """Create model instance from API response."""
+        return cls.model_validate(response)
+
+
+# ============================================================================
+# ENUMERATIONS
+# ============================================================================
 
 
 class VpcRole(str, Enum):
-    """
-    Enumeration of valid VPC roles.
-    """
+    """VPC role enumeration."""
+
     PRIMARY = "primary"
     SECONDARY = "secondary"
     OPERATIONAL_PRIMARY = "operationalPrimary"
     OPERATIONAL_SECONDARY = "operationalSecondary"
 
 
-class VpcPairModel(BaseModel):
+class TemplateType(str, Enum):
+    """Template type enumeration."""
+
+    DEFAULT = "default"
+    CUSTOM = "custom"
+
+
+class KeepAliveVrf(str, Enum):
+    """Keep-alive VRF options."""
+
+    DEFAULT = "default"
+    MANAGEMENT = "management"
+
+
+class VpcAction(str, Enum):
+    """VPC management actions."""
+
+    PAIR = "pair"
+    UNPAIR = "unPair"
+
+
+class ComponentType(str, Enum):
+    """Component type for overview queries."""
+
+    FULL = "full"
+    HEALTH = "health"
+    MODULE = "module"
+    VXLAN = "vxlan"
+    OVERLAY = "overlay"
+    PAIRS_INFO = "pairsInfo"
+    INVENTORY = "inventory"
+    ANOMALIES = "anomalies"
+
+
+# ============================================================================
+# NESTED MODELS (No Identifiers)
+# ============================================================================
+
+
+class SwitchInfo(NDVpcPairNestedModel):
+    """Generic switch information for both peers."""
+
+    switch: str = Field(alias="switch", description="Switch value")
+    peer_switch: str = Field(alias="peerSwitch", description="Peer switch value")
+
+
+class SwitchIntInfo(NDVpcPairNestedModel):
+    """Generic switch integer information for both peers."""
+
+    switch: FlexibleInt = Field(alias="switch", description="Switch value")
+    peer_switch: FlexibleInt = Field(alias="peerSwitch", description="Peer switch value")
+
+
+class SwitchBoolInfo(NDVpcPairNestedModel):
+    """Generic switch boolean information for both peers."""
+
+    switch: FlexibleBool = Field(alias="switch", description="Switch value")
+    peer_switch: FlexibleBool = Field(alias="peerSwitch", description="Peer switch value")
+
+
+class SyncCounts(NDVpcPairNestedModel):
+    """Sync status counts."""
+
+    in_sync: FlexibleInt = Field(default=0, alias="inSync", description="In-sync items")
+    pending: FlexibleInt = Field(default=0, alias="pending", description="Pending items")
+    out_of_sync: FlexibleInt = Field(default=0, alias="outOfSync", description="Out-of-sync items")
+    in_progress: FlexibleInt = Field(default=0, alias="inProgress", description="In-progress items")
+
+
+class AnomaliesCount(NDVpcPairNestedModel):
+    """Anomaly counts by severity."""
+
+    critical: FlexibleInt = Field(default=0, alias="critical", description="Critical anomalies")
+    major: FlexibleInt = Field(default=0, alias="major", description="Major anomalies")
+    minor: FlexibleInt = Field(default=0, alias="minor", description="Minor anomalies")
+    warning: FlexibleInt = Field(default=0, alias="warning", description="Warning anomalies")
+
+
+class HealthMetrics(NDVpcPairNestedModel):
+    """Health metrics for both switches."""
+
+    switch: str = Field(alias="switch", description="Switch health status")
+    peer_switch: str = Field(alias="peerSwitch", description="Peer switch health status")
+
+
+class ResourceMetrics(NDVpcPairNestedModel):
+    """Resource utilization metrics."""
+
+    switch: FlexibleInt = Field(alias="switch", description="Switch metric value")
+    peer_switch: FlexibleInt = Field(alias="peerSwitch", description="Peer switch metric value")
+
+
+class InterfaceStatusCounts(NDVpcPairNestedModel):
+    """Interface status counts."""
+
+    up: FlexibleInt = Field(alias="up", description="Interfaces in up state")
+    down: FlexibleInt = Field(alias="down", description="Interfaces in down state")
+
+
+class LogicalInterfaceCounts(NDVpcPairNestedModel):
+    """Logical interface type counts."""
+
+    port_channel: FlexibleInt = Field(alias="portChannel", description="Port channel interfaces")
+    loopback: FlexibleInt = Field(alias="loopback", description="Loopback interfaces")
+    vpc: FlexibleInt = Field(alias="vPC", description="VPC interfaces")
+    vlan: FlexibleInt = Field(alias="vlan", description="VLAN interfaces")
+    nve: FlexibleInt = Field(alias="nve", description="NVE interfaces")
+
+
+class ResponseCounts(NDVpcPairNestedModel):
+    """Response metadata counts."""
+
+    total: FlexibleInt = Field(alias="total", description="Total count")
+    remaining: FlexibleInt = Field(alias="remaining", description="Remaining count")
+
+
+# ============================================================================
+# VPC PAIR DETAILS MODELS (Nested Template Configuration)
+# ============================================================================
+
+
+class VpcPairDetailsDefault(NDVpcPairNestedModel):
     """
-    Represents a VPC pair configuration.
-    
-    This model defines the structure for VPC pair configurations in Cisco Nexus Dashboard,
-    supporting both playbook input validation and API response processing.
-    
-    Attributes:
-        peer1SwitchId (str): Serial number of the first switch in the VPC pair.
-            Maps to both peer1SwitchId in API and peer1_switch_id in playbook.
-        peer2SwitchId (str): Serial number of the second switch in the VPC pair.
-            Maps to both peer2SwitchId in API and peer2_switch_id in playbook.
-        useVirtualPeerLink (bool): Whether to use virtual peer link.
-            Maps to useVirtualPeerLink in API. Defaults to False.
-        # description (Optional[str]): Description of the VPC pair.
-        # domain_id (Optional[int]): Domain ID of the VPC pair.
-        # peer1_name (Optional[str]): Hostname of the first peer switch.
-        # peer1_vpc_role (Optional[VpcRole]): VPC role of the first peer.
-        # peer2_name (Optional[str]): Hostname of the second peer switch.  
-        # peer2_vpc_role (Optional[VpcRole]): VPC role of the second peer.
-        # intended_peer_name (Optional[str]): Hostname of the intended peer switch.
+    Default template VPC pair configuration.
+
+    OpenAPI: vpcPairDetailsDefault
     """
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True,
-        use_enum_values=True,
-        validate_assignment=True,
-        populate_by_name=True,
-        extra="ignore",
+    type: TemplateType = Field(default=TemplateType.DEFAULT, alias="type", description="Template type")
+    domain_id: Optional[FlexibleInt] = Field(default=None, alias="domainId", description="VPC domain ID")
+    switch_keep_alive_local_ip: Optional[str] = Field(default=None, alias="switchKeepAliveLocalIp", description="Peer-1 keep-alive IP")
+    peer_switch_keep_alive_local_ip: Optional[str] = Field(default=None, alias="peerSwitchKeepAliveLocalIp", description="Peer-2 keep-alive IP")
+    keep_alive_vrf: Optional[KeepAliveVrf] = Field(default=None, alias="keepAliveVrf", description="Keep-alive VRF")
+    keep_alive_hold_timeout: Optional[FlexibleInt] = Field(default=3, alias="keepAliveHoldTimeout", description="Keep-alive hold timeout")
+    enable_mirror_config: Optional[FlexibleBool] = Field(default=False, alias="enableMirrorConfig", description="Enable config mirroring")
+    is_vpc_plus: Optional[FlexibleBool] = Field(default=False, alias="isVpcPlus", description="VPC+ topology")
+    fabric_path_switch_id: Optional[FlexibleInt] = Field(default=None, alias="fabricPathSwitchId", description="FabricPath switch ID")
+    is_vteps: Optional[FlexibleBool] = Field(default=False, alias="isVteps", description="Configure NVE source loopback")
+    nve_interface: Optional[FlexibleInt] = Field(default=1, alias="nveInterface", description="NVE interface")
+    switch_source_loopback: Optional[FlexibleInt] = Field(default=None, alias="switchSourceLoopback", description="Peer-1 source loopback")
+    peer_switch_source_loopback: Optional[FlexibleInt] = Field(default=None, alias="peerSwitchSourceLoopback", description="Peer-2 source loopback")
+    switch_primary_ip: Optional[str] = Field(default=None, alias="switchPrimaryIp", description="Peer-1 primary IP")
+    peer_switch_primary_ip: Optional[str] = Field(default=None, alias="peerSwitchPrimaryIp", description="Peer-2 primary IP")
+    loopback_secondary_ip: Optional[str] = Field(default=None, alias="loopbackSecondaryIp", description="Secondary loopback IP")
+    switch_domain_config: Optional[str] = Field(default=None, alias="switchDomainConfig", description="Peer-1 domain config CLI")
+    peer_switch_domain_config: Optional[str] = Field(default=None, alias="peerSwitchDomainConfig", description="Peer-2 domain config CLI")
+    switch_po_id: Optional[FlexibleInt] = Field(default=None, alias="switchPoId", description="Peer-1 port-channel ID")
+    peer_switch_po_id: Optional[FlexibleInt] = Field(default=None, alias="peerSwitchPoId", description="Peer-2 port-channel ID")
+    switch_member_interfaces: Optional[FlexibleListStr] = Field(default=None, alias="switchMemberInterfaces", description="Peer-1 member interfaces")
+    peer_switch_member_interfaces: Optional[FlexibleListStr] = Field(default=None, alias="peerSwitchMemberInterfaces", description="Peer-2 member interfaces")
+    po_mode: Optional[str] = Field(default="active", alias="poMode", description="Port-channel mode")
+    switch_po_description: Optional[str] = Field(default=None, alias="switchPoDescription", description="Peer-1 port-channel description")
+    peer_switch_po_description: Optional[str] = Field(default=None, alias="peerSwitchPoDescription", description="Peer-2 port-channel description")
+    admin_state: Optional[FlexibleBool] = Field(default=True, alias="adminState", description="Admin state")
+    allowed_vlans: Optional[str] = Field(default="all", alias="allowedVlans", description="Allowed VLANs")
+    switch_native_vlan: Optional[FlexibleInt] = Field(default=None, alias="switchNativeVlan", description="Peer-1 native VLAN")
+    peer_switch_native_vlan: Optional[FlexibleInt] = Field(default=None, alias="peerSwitchNativeVlan", description="Peer-2 native VLAN")
+    switch_po_config: Optional[str] = Field(default=None, alias="switchPoConfig", description="Peer-1 port-channel freeform config")
+    peer_switch_po_config: Optional[str] = Field(default=None, alias="peerSwitchPoConfig", description="Peer-2 port-channel freeform config")
+    fabric_name: Optional[str] = Field(default=None, alias="fabricName", description="Fabric name")
+
+
+class VpcPairDetailsCustom(NDVpcPairNestedModel):
+    """
+    Custom template VPC pair configuration.
+
+    OpenAPI: vpcPairDetailsCustom
+    """
+
+    type: TemplateType = Field(default=TemplateType.CUSTOM, alias="type", description="Template type")
+    template_name: str = Field(alias="templateName", description="Name of the custom template")
+    template_config: Dict[str, Any] = Field(alias="templateConfig", description="Free-form configuration")
+
+
+# ============================================================================
+# CONFIGURATION DOMAIN MODELS
+# ============================================================================
+
+
+class VpcPairBase(NDVpcPairBaseModel):
+    """
+    Base schema for VPC pairing with common properties.
+
+    Identifier: (switch_id, peer_switch_id) - composite
+    OpenAPI: vpcPairBase
+    """
+
+    # Identifier configuration
+    identifiers: ClassVar[List[str]] = ["switch_id", "peer_switch_id"]
+    identifier_strategy: ClassVar[Literal["single", "composite", "hierarchical"]] = "composite"
+
+    # Fields
+    switch_id: str = Field(alias="switchId", description="Switch serial number (Peer-1)")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer switch serial number (Peer-2)")
+    use_virtual_peer_link: FlexibleBool = Field(default=False, alias="useVirtualPeerLink", description="Virtual peer link present")
+    vpc_pair_details: Optional[Union[VpcPairDetailsDefault, VpcPairDetailsCustom]] = Field(
+        default=None, discriminator="type", alias="vpcPairDetails", description="VPC pair configuration details"
     )
 
-    # Required fields for playbook configuration
-    peer1SwitchId: str = Field(
-        alias="peerOneId",
-        description="Serial number of the first switch in the VPC pair"
-    )
-    peer2SwitchId: Optional[str] = Field(
-        default=None,
-        alias="peerTwoId",
-        description="Serial number of the second switch in the VPC pair"
-    )
-    useVirtualPeerLink: bool = Field(
-        default=False,
-        description="Whether to use virtual peer link for the VPC pair"
-    )
-    
-    # # Optional fields for API response data
-    # description: Optional[str] = Field(
-    #     default=None,
-    #     description="Description of the VPC pair record"
-    # )
-    # domain_id: Optional[int] = Field(
-    #     default=None,
-    #     alias="domainId",
-    #     description="Domain ID of the VPC"
-    # )
-    # peer1_name: Optional[str] = Field(
-    #     default=None,
-    #     alias="peer1Name",
-    #     description="Hostname of the first peer switch"
-    # )
-    # peer1_vpc_role: Optional[VpcRole] = Field(
-    #     default=None,
-    #     alias="peer1VpcRole",
-    #     description="VPC role of the first peer switch"
-    # )
-    # peer2_name: Optional[str] = Field(
-    #     default=None,
-    #     alias="peer2Name", 
-    #     description="Hostname of the second peer switch"
-    # )
-    # peer2_vpc_role: Optional[VpcRole] = Field(
-    #     default=None,
-    #     alias="peer2VpcRole",
-    #     description="VPC role of the second peer switch"
-    # )
-    # intended_peer_name: Optional[str] = Field(
-    #     default=None,
-    #     alias="intendedPeerName",
-    #     description="Hostname of the intended peer switch"
-    # )
-
-    @field_validator("peer1SwitchId", "peer2SwitchId", mode="before")
-    @classmethod
-    def validate_switch_ids(cls, value: str, info) -> str:
-        """
-        Validates switch serial numbers.
-        
-        Args:
-            value: The switch serial number to validate.
-            info: Field validation info containing field name.
-            
-        Returns:
-            str: The validated switch serial number.
-            
-        Raises:
-            ValueError: If the switch ID is empty or not a string.
-        """
-        if value is None:
-            return value
-            
-        # Handle empty strings for optional peer2SwitchId
-        if isinstance(value, str) and value.strip() == "":
-            if info.field_name == "peer2SwitchId":
-                mainlog.debug("Empty string provided for optional peer2SwitchId, converting to None")
-                return None
-            else:
-                mainlog.error(f"Invalid switch ID: empty string provided for required field {info.field_name}")
-                raise ValueError("Switch ID must be a non-empty string.")
-        
-        mainlog.debug(f"Validating switch ID: {value}")
-        if not value or not isinstance(value, str):
-            mainlog.error(f"Invalid switch ID: {value}. Must be a non-empty string.")
-            raise ValueError("Switch ID must be a non-empty string.")
-        validated_value = value.strip()
-        mainlog.debug(f"Switch ID validation successful: {validated_value}")
-        return validated_value
-
-    @model_validator(mode="after")
-    def validate_different_switch_ids(self) -> "VpcPairModel":
-        """
-        Validates that peer1SwitchId and peer2SwitchId are different when both are present.
-        Also ensures consistent ordering by sorting peer1 and peer2 switch IDs.
-        
-        Returns:
-            VpcPairModel: The validated model instance.
-            
-        Raises:
-            ValueError: If both switch IDs are the same.
-        """
-        mainlog.debug(f"Validating switch IDs are different: peer1={self.peer1SwitchId}, peer2={self.peer2SwitchId}")
-        
-        # Check if peer2SwitchId is present and both IDs are the same
-        if self.peer2SwitchId and self.peer1SwitchId == self.peer2SwitchId:
-            mainlog.error(f"Invalid VPC pair: peer1SwitchId and peer2SwitchId cannot be the same: {self.peer1SwitchId}, {self.peer2SwitchId}")
-            raise ValueError("peer1SwitchId and peer2SwitchId must be different")
-        
-        # Sort peer1 and peer2 to ensure consistent ordering when both are present
-        if self.peer2SwitchId:
-            switches = sorted([self.peer1SwitchId, self.peer2SwitchId])
-            if switches[0] != self.peer1SwitchId or switches[1] != self.peer2SwitchId:
-                mainlog.debug(f"Reordering switches for consistency: {self.peer1SwitchId}, {self.peer2SwitchId} -> {switches[0]}, {switches[1]}")
-                object.__setattr__(self, 'peer1SwitchId', switches[0])
-                object.__setattr__(self, 'peer2SwitchId', switches[1])
-        
-        mainlog.debug("Switch ID difference validation successful")
-        return self
-
-    # @field_validator("domain_id", mode="before")
-    # @classmethod
-    # def validate_domain_id(cls, value) -> Optional[int]:
-    #     """
-    #     Validates domain ID is a positive integer.
-        
-    #     Args:
-    #         value: The domain ID to validate.
-            
-    #     Returns:
-    #         Optional[int]: The validated domain ID or None.
-            
-    #     Raises:
-    #         ValueError: If domain ID is not a positive integer.
-    #     """
-    #     mainlog.debug(f"Validating domain ID: {value}")
-    #     if value is None:
-    #         mainlog.debug("Domain ID is None, validation passed")
-    #         return None
-    #     if not isinstance(value, int) or value <= 0:
-    #         mainlog.error(f"Invalid domain ID: {value}. Must be a positive integer.")
-    #         raise ValueError("Domain ID must be a positive integer.")
-    #     mainlog.debug(f"Domain ID validation successful: {value}")
-    #     return value
-
-    def __eq__(self, other) -> bool:
-        """
-        Compare VPC pairs for equality based on switch IDs.
-        
-        Args:
-            other: Another VpcPairModel instance to compare with.
-            
-        Returns:
-            bool: True if the VPC pairs have the same switch IDs (in any order).
-        """
-        mainlog.debug(f"Comparing VPC pairs: {self} vs {other}")
-        if not isinstance(other, VpcPairModel):
-            mainlog.debug("Comparison failed: other is not a VpcPairModel instance")
-            return False
-        
-        # VPC pairs are considered equal if they have the same switches,
-        # regardless of which is peer1 vs peer2
-        self_switches = {self.peer1SwitchId, self.peer2SwitchId}
-        other_switches = {other.peer1SwitchId, other.peer2SwitchId}
-        result = self_switches == other_switches and self.useVirtualPeerLink == other.useVirtualPeerLink
-        mainlog.debug(f"VPC pair comparison result: {result}")
-        return result
-
-    def get_switch_pair_key(self) -> str:
-        """
-        Generate a consistent key for the VPC pair regardless of switch order.
-
-        Returns:
-            str: A consistent string key for the switch pair.
-        """
-        switches = sorted([self.peer1SwitchId, self.peer2SwitchId])
-        key = f"{switches[0]}-{switches[1]}"
-        mainlog.debug(f"Generated switch pair key: {key}")
-        return key
-
-    def to_api_payload(self) -> dict:
-        """
-        Convert the model to API payload format for create/update operations.
-        
-        Returns:
-            dict: The API payload dictionary.
-        """
-        payload = {
-            "peer1SwitchId": self.peer1SwitchId,
-            "peer2SwitchId": self.peer2SwitchId,
-            "useVirtualPeerLink": self.useVirtualPeerLink
-        }
-        mainlog.debug(f"Generated API payload: {payload}")
-        return payload
+    def to_payload(self) -> Dict[str, Any]:
+        """Convert to API payload format."""
+        return self.model_dump(by_alias=True, exclude_none=True)
 
     @classmethod
-    def get_model(cls, data: dict, state: str = None, extra: str = "ignore", sw_sn_from_ip: dict = None) -> "VpcPairModel":
-        """
-        Create a VpcPairModel instance from dict.
-        
-        Args:
-            data: Dictionary containing data for the VPC pair.
-            state: The state parameter to determine validation requirements.
-            extra: If "forbid", emulates extra="forbid" behavior by rejecting unexpected fields.
-            sw_sn_from_ip: Dictionary mapping switch IP addresses to serial numbers.
+    def from_response(cls, response: Dict[str, Any]) -> Self:
+        """Create instance from API response."""
+        return cls.model_validate(response)
 
-        Returns:
-            VpcPairModel: A new instance populated for the VPC pair.
-        """
-        mainlog.debug(f"Creating VpcPairModel from VPC pair data: {data}, state: {state}, extra: {extra}")
-        
-        # Create a copy to avoid modifying the original data
-        processed_data = data.copy()
-        
-        # Handle both naming conventions for peer1_switch_id
-        if processed_data.get("peerOneId"):
-            processed_data["peer1SwitchId"] = processed_data.pop("peerOneId")
-        
-        # Handle both naming conventions for peer2_switch_id  
-        if processed_data.get("peerTwoId"):
-            processed_data["peer2SwitchId"] = processed_data.pop("peerTwoId")
-            
-        # Convert IP addresses to serial numbers if mapping is provided
-        if sw_sn_from_ip:
-            if processed_data.get("peer1SwitchId"):
-                original_peer1 = processed_data["peer1SwitchId"]
-                processed_data["peer1SwitchId"] = sw_sn_from_ip.get(original_peer1, original_peer1)
-                # If conversion didn't happen and state is not query, check if it's a valid serial number in the fabric
-                if (state and state.lower() != "query" and 
-                    processed_data["peer1SwitchId"] == original_peer1 and 
-                    original_peer1 not in sw_sn_from_ip.values()):
-                    raise ValueError(f"peer1SwitchId '{original_peer1}' not found in fabric inventory. Must be either a valid switch IP address or serial number. Available IP-SN: {sw_sn_from_ip}")
-            
-            if processed_data.get("peer2SwitchId"):
-                original_peer2 = processed_data["peer2SwitchId"] 
-                processed_data["peer2SwitchId"] = sw_sn_from_ip.get(original_peer2, original_peer2)
-                # If conversion didn't happen and state is not query, check if it's a valid serial number in the fabric
-                if (state and state.lower() != "query" and 
-                    processed_data["peer2SwitchId"] == original_peer2 and 
-                    original_peer2 not in sw_sn_from_ip.values()):
-                    raise ValueError(f"peer2SwitchId '{original_peer2}' not found in fabric inventory. Must be either a valid switch IP address or serial number. Available IP-SN: {sw_sn_from_ip}")
-        
-        # Emulate extra="forbid" behavior if strict mode is enabled
-        if extra == "forbid":
-            # Get all valid field names including aliases
-            valid_fields = set()
-            for field_name, field_info in cls.model_fields.items():
-                valid_fields.add(field_name)
-                if hasattr(field_info, 'alias') and field_info.alias:
-                    valid_fields.add(field_info.alias)
-            
-            # Check for unexpected fields
-            unexpected_fields = set(processed_data.keys()) - valid_fields
-            if unexpected_fields:
-                mainlog.error(f"Unexpected fields found in extra=forbid mode: {unexpected_fields}")
-                raise ValueError(f"Unexpected fields not allowed in extra=forbid mode: {', '.join(sorted(unexpected_fields))}")
-        
-        # Validate that peer2SwitchId is present when state is not "query"
-        if not state or state.lower() != "query":
-            peer2_switch_id = processed_data.get("peer2_switch_id") or processed_data.get("peer2SwitchId")
-            if not peer2_switch_id:
-                mainlog.error(f"peer2SwitchId is required when state is '{state}'")
-                raise ValueError(f"peer2SwitchId is required when state is '{state}'")
-        
-        # Validate that useVirtualPeerLink should not be set for query or deleted states
-        if state and state.lower() in ["query", "deleted"]:
-            if processed_data.get("useVirtualPeerLink") is not None:
-                mainlog.error(f"useVirtualPeerLink should not be set when state is '{state}'.")
-                raise ValueError(f"useVirtualPeerLink should not be set when state is '{state}'.")
-        
-        instance = cls(**processed_data)
-        mainlog.debug(f"Successfully created VpcPairModel instance: {instance}")
-        return instance
+
+class VpcPairingRequest(NDVpcPairBaseModel):
+    """
+    Request schema for pairing VPC switches.
+
+    Identifier: (switch_id, peer_switch_id) - composite
+    OpenAPI: vpcPairingRequest
+    """
+
+    # Identifier configuration
+    identifiers: ClassVar[List[str]] = ["switch_id", "peer_switch_id"]
+    identifier_strategy: ClassVar[Literal["single", "composite", "hierarchical"]] = "composite"
+
+    # Fields
+    vpc_action: VpcAction = Field(default=VpcAction.PAIR, alias="vpcAction", description="Action to pair")
+    switch_id: str = Field(alias="switchId", description="Switch serial number (Peer-1)")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer switch serial number (Peer-2)")
+    use_virtual_peer_link: FlexibleBool = Field(default=False, alias="useVirtualPeerLink", description="Virtual peer link present")
+    vpc_pair_details: Optional[Union[VpcPairDetailsDefault, VpcPairDetailsCustom]] = Field(
+        default=None, discriminator="type", alias="vpcPairDetails", description="VPC pair configuration details"
+    )
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Convert to API payload format."""
+        return self.model_dump(by_alias=True, exclude_none=True)
+
+    @classmethod
+    def from_response(cls, response: Dict[str, Any]) -> Self:
+        """Create instance from API response."""
+        return cls.model_validate(response)
+
+
+class VpcUnpairingRequest(NDVpcPairBaseModel):
+    """
+    Request schema for unpairing VPC switches.
+
+    Identifier: N/A (no specific switch IDs in unpair request)
+    OpenAPI: vpcUnpairingRequest
+    """
+
+    # No identifiers for unpair request
+    identifiers: ClassVar[List[str]] = []
+
+    # Fields
+    vpc_action: VpcAction = Field(default=VpcAction.UNPAIR, alias="vpcAction", description="Action to unpair")
+
+    def get_identifier_value(self) -> str:
+        """Override - unpair doesn't have identifiers."""
+        return "unpair"
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Convert to API payload format."""
+        return self.model_dump(by_alias=True, exclude_none=True)
+
+    @classmethod
+    def from_response(cls, response: Dict[str, Any]) -> Self:
+        """Create instance from API response."""
+        return cls.model_validate(response)
+
+
+# ============================================================================
+# MONITORING DOMAIN MODELS
+# ============================================================================
+
+
+class VpcPairsInfoBase(NDVpcPairNestedModel):
+    """
+    VPC pair information base.
+
+    OpenAPI: vpcPairsInfoBase
+    """
+
+    switch_name: SwitchInfo = Field(alias="switchName", description="Switch name")
+    ip_address: SwitchInfo = Field(alias="ipAddress", description="IP address")
+    fabric_name: str = Field(alias="fabricName", description="Fabric name")
+    connectivity_status: SwitchInfo = Field(alias="connectivityStatus", description="Connectivity status")
+    maintenance_mode: SwitchInfo = Field(alias="maintenanceMode", description="Maintenance mode")
+    uptime: SwitchInfo = Field(alias="uptime", description="Switch uptime")
+    switch_id: SwitchInfo = Field(alias="switchId", description="Switch serial number")
+    model: SwitchInfo = Field(alias="model", description="Switch model")
+    switch_role: SwitchInfo = Field(alias="switchRole", description="Switch role")
+    is_consistent: SwitchBoolInfo = Field(alias="isConsistent", description="Consistency status")
+    domain_id: SwitchIntInfo = Field(alias="domainId", description="Domain ID")
+    platform_type: SwitchInfo = Field(alias="platformType", description="Platform type")
+
+
+class VpcPairHealthBase(NDVpcPairNestedModel):
+    """
+    VPC pair health information.
+
+    OpenAPI: vpcPairHealthBase
+    """
+
+    switch_id: str = Field(alias="switchId", description="Switch serial number")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer switch serial number")
+    health: HealthMetrics = Field(alias="health", description="Health status")
+    cpu: ResourceMetrics = Field(alias="cpu", description="CPU utilization")
+    memory: ResourceMetrics = Field(alias="memory", description="Memory utilization")
+    temperature: ResourceMetrics = Field(alias="temperature", description="Temperature in Celsius")
+
+
+class VpcPairsVxlanBase(NDVpcPairNestedModel):
+    """
+    VPC pairs VXLAN details.
+
+    OpenAPI: vpcPairsVxlanBase
+    """
+
+    switch_id: str = Field(alias="switchId", description="Peer1 switch serial number")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer2 switch serial number")
+    routing_loopback: SwitchInfo = Field(alias="routingLoopback", description="Routing loopback")
+    routing_loopback_status: SwitchInfo = Field(alias="routingLoopbackStatus", description="Routing loopback status")
+    routing_loopback_primary_ip: SwitchInfo = Field(alias="routingLoopbackPrimaryIp", description="Routing loopback primary IP")
+    routing_loopback_secondary_ip: Optional[SwitchInfo] = Field(default=None, alias="routingLoopbackSecondaryIp", description="Routing loopback secondary IP")
+    vtep_loopback: SwitchInfo = Field(alias="vtepLoopback", description="VTEP loopback")
+    vtep_loopback_status: SwitchInfo = Field(alias="vtepLoopbackStatus", description="VTEP loopback status")
+    vtep_loopback_primary_ip: SwitchInfo = Field(alias="vtepLoopbackPrimaryIp", description="VTEP loopback primary IP")
+    vtep_loopback_secondary_ip: Optional[SwitchInfo] = Field(default=None, alias="vtepLoopbackSecondaryIp", description="VTEP loopback secondary IP")
+    nve_interface: SwitchInfo = Field(alias="nveInterface", description="NVE interface")
+    nve_status: SwitchInfo = Field(alias="nveStatus", description="NVE status")
+    multisite_loopback: Optional[SwitchInfo] = Field(default=None, alias="multisiteLoopback", description="Multisite loopback")
+    multisite_loopback_status: Optional[SwitchInfo] = Field(default=None, alias="multisiteLoopbackStatus", description="Multisite loopback status")
+    multisite_loopback_primary_ip: Optional[SwitchInfo] = Field(default=None, alias="multisiteLoopbackPrimaryIp", description="Multisite loopback primary IP")
+
+
+class VpcPairsOverlayBase(NDVpcPairNestedModel):
+    """
+    VPC pairs overlay base.
+
+    OpenAPI: vpcPairsOverlayBase
+    """
+
+    network_count: SyncCounts = Field(alias="networkCount", description="Network count")
+    vrf_count: SyncCounts = Field(alias="vrfCount", description="VRF count")
+
+
+class VpcPairsInventoryBase(NDVpcPairNestedModel):
+    """
+    VPC pair inventory base.
+
+    OpenAPI: vpcPairsInventoryBase
+    """
+
+    switch_id: str = Field(alias="switchId", description="Peer1 switch serial number")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer2 switch serial number")
+    admin_status: InterfaceStatusCounts = Field(alias="adminStatus", description="Admin status")
+    operational_status: InterfaceStatusCounts = Field(alias="operationalStatus", description="Operational status")
+    sync_status: Dict[str, FlexibleInt] = Field(alias="syncStatus", description="Sync status")
+    logical_interfaces: LogicalInterfaceCounts = Field(alias="logicalInterfaces", description="Logical interfaces")
+
+
+class VpcPairsModuleBase(NDVpcPairNestedModel):
+    """
+    VPC pair module base.
+
+    OpenAPI: vpcPairsModuleBase
+    """
+
+    switch_id: str = Field(alias="switchId", description="Peer1 switch serial number")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer2 switch serial number")
+    module_information: Dict[str, str] = Field(default_factory=dict, alias="moduleInformation", description="VPC pair module information")
+    fex_details: Dict[str, str] = Field(default_factory=dict, alias="fexDetails", description="Fex details name-value pair(s)")
+
+
+class VpcPairAnomaliesBase(NDVpcPairNestedModel):
+    """
+    VPC pair anomalies information.
+
+    OpenAPI: vpcPairAnomaliesBase
+    """
+
+    switch_id: str = Field(alias="switchId", description="Peer1 switch serial number")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer2 switch serial number")
+    anomalies_count: AnomaliesCount = Field(alias="anomaliesCount", description="Anomaly counts by severity")
+
+
+# ============================================================================
+# CONSISTENCY DOMAIN MODELS
+# ============================================================================
+
+
+class CommonVpcConsistencyParams(NDVpcPairNestedModel):
+    """
+    Common consistency parameters for VPC domain.
+
+    OpenAPI: commonVpcConsistencyParams
+    """
+
+    # Basic identifiers
+    switch_name: str = Field(alias="switchName", description="Switch name")
+    ip_address: str = Field(alias="ipAddress", description="IP address")
+    domain_id: FlexibleInt = Field(alias="domainId", description="Domain ID")
+
+    # Port channel info
+    peer_link_port_channel: FlexibleInt = Field(alias="peerLinkPortChannel", description="Port channel peer link")
+    port_channel_name: Optional[str] = Field(default=None, alias="portChannelName", description="Port channel name")
+    description: Optional[str] = Field(default=None, alias="description", description="Port channel description")
+
+    # VPC system parameters
+    system_mac_address: str = Field(alias="systemMacAddress", description="System MAC address")
+    system_priority: FlexibleInt = Field(alias="systemPriority", description="System priority")
+    udp_port: FlexibleInt = Field(alias="udpPort", description="UDP port")
+    interval: FlexibleInt = Field(alias="interval", description="Interval")
+    timeout: FlexibleInt = Field(alias="timeout", description="Timeout")
+
+    # Additional fields (simplified - add as needed)
+    # NOTE: OpenAPI has many more fields - add them as required
+
+
+class VpcPairConsistency(NDVpcPairNestedModel):
+    """
+    VPC pair consistency check results.
+
+    OpenAPI: vpcPairConsistency
+    """
+
+    switch_id: str = Field(alias="switchId", description="Primary switch serial number")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Secondary switch serial number")
+    type2_consistency: FlexibleBool = Field(alias="type2Consistency", description="Type-2 consistency status")
+    type2_consistency_reason: str = Field(alias="type2ConsistencyReason", description="Consistency reason")
+    timestamp: Optional[FlexibleInt] = Field(default=None, alias="timestamp", description="Timestamp of check")
+    primary_parameters: CommonVpcConsistencyParams = Field(alias="primaryParameters", description="Primary switch consistency parameters")
+    secondary_parameters: CommonVpcConsistencyParams = Field(alias="secondaryParameters", description="Secondary switch consistency parameters")
+    is_consistent: Optional[FlexibleBool] = Field(default=None, alias="isConsistent", description="Overall consistency")
+    is_discovered: Optional[FlexibleBool] = Field(default=None, alias="isDiscovered", description="Whether pair is discovered")
+
+
+# ============================================================================
+# VALIDATION DOMAIN MODELS
+# ============================================================================
+
+
+class VpcPairRecommendation(NDVpcPairNestedModel):
+    """
+    Recommendation information for a switch.
+
+    OpenAPI: vpcPairRecommendation
+    """
+
+    hostname: str = Field(alias="hostname", description="Logical name of switch")
+    ip_address: str = Field(alias="ipAddress", description="IP address of switch")
+    switch_id: str = Field(alias="switchId", description="Serial number of the switch")
+    software_version: str = Field(alias="softwareVersion", description="NXOS version of switch")
+    fabric_name: str = Field(alias="fabricName", description="Fabric name")
+    recommendation_reason: str = Field(alias="recommendationReason", description="Recommendation message")
+    block_selection: FlexibleBool = Field(alias="blockSelection", description="Block selection")
+    platform_type: str = Field(alias="platformType", description="Platform type of switch")
+    use_virtual_peer_link: FlexibleBool = Field(alias="useVirtualPeerLink", description="Virtual peer link available")
+    is_current_peer: FlexibleBool = Field(alias="isCurrentPeer", description="Device is current peer")
+    is_recommended: FlexibleBool = Field(alias="isRecommended", description="Recommended device")
+
+
+# ============================================================================
+# INVENTORY DOMAIN MODELS
+# ============================================================================
+
+
+class VpcPairBaseSwitchDetails(NDVpcPairNestedModel):
+    """
+    Base fields for VPC pair records.
+
+    OpenAPI: vpcPairBaseSwitchDetails
+    """
+
+    domain_id: FlexibleInt = Field(alias="domainId", description="Domain ID of the VPC")
+    switch_id: str = Field(alias="switchId", description="Serial number of the switch")
+    switch_name: str = Field(alias="switchName", description="Hostname of the switch")
+    peer_switch_id: str = Field(alias="peerSwitchId", description="Serial number of the peer switch")
+    peer_switch_name: str = Field(alias="peerSwitchName", description="Hostname of the peer switch")
+
+
+class VpcPairIntended(VpcPairBaseSwitchDetails):
+    """
+    Intended VPC pair record.
+
+    OpenAPI: vpcPairIntended
+    """
+
+    type: Literal["intendedPairs"] = Field(default="intendedPairs", alias="type", description="Type identifier")
+
+
+class VpcPairDiscovered(VpcPairBaseSwitchDetails):
+    """
+    Discovered VPC pair record.
+
+    OpenAPI: vpcPairDiscovered
+    """
+
+    type: Literal["discoveredPairs"] = Field(default="discoveredPairs", alias="type", description="Type identifier")
+    switch_vpc_role: VpcRole = Field(alias="switchVpcRole", description="VPC role of the switch")
+    peer_switch_vpc_role: VpcRole = Field(alias="peerSwitchVpcRole", description="VPC role of the peer switch")
+    intended_peer_name: str = Field(alias="intendedPeerName", description="Name of the intended peer switch")
+    description: str = Field(alias="description", description="Description of any discrepancies or issues")
+
+
+class Metadata(NDVpcPairNestedModel):
+    """
+    Metadata for pagination and links.
+
+    OpenAPI: Metadata
+    """
+
+    counts: ResponseCounts = Field(alias="counts", description="Count information")
+    links: Optional[Dict[str, str]] = Field(default=None, alias="links", description="Pagination links (next, previous)")
+
+
+class VpcPairsResponse(NDVpcPairNestedModel):
+    """
+    Response schema for listing VPC pairs.
+
+    OpenAPI: vpcPairsResponse
+    """
+
+    vpc_pairs: List[Union[VpcPairIntended, VpcPairDiscovered]] = Field(alias="vpcPairs", description="List of VPC pairs")
+    meta: Metadata = Field(alias="meta", description="Response metadata")
+
+
+# ============================================================================
+# WRAPPER MODELS WITH COMPONENT TYPE
+# ============================================================================
+
+
+class VpcPairsInfo(NDVpcPairNestedModel):
+    """VPC pairs information wrapper."""
+
+    component_type: ComponentType = Field(default=ComponentType.PAIRS_INFO, alias="componentType", description="Type of the component")
+    info: VpcPairsInfoBase = Field(alias="info", description="VPC pair info")
+
+
+class VpcPairHealth(NDVpcPairNestedModel):
+    """VPC pair health wrapper."""
+
+    component_type: ComponentType = Field(default=ComponentType.HEALTH, alias="componentType", description="Type of the component")
+    health: VpcPairHealthBase = Field(alias="health", description="Health details")
+
+
+class VpcPairsModule(NDVpcPairNestedModel):
+    """VPC pairs module wrapper."""
+
+    component_type: ComponentType = Field(default=ComponentType.MODULE, alias="componentType", description="Type of the component")
+    module: VpcPairsModuleBase = Field(alias="module", description="Module details")
+
+
+class VpcPairAnomalies(NDVpcPairNestedModel):
+    """VPC pair anomalies wrapper."""
+
+    component_type: ComponentType = Field(default=ComponentType.ANOMALIES, alias="componentType", description="Type of the component")
+    anomalies: VpcPairAnomaliesBase = Field(alias="anomalies", description="Anomalies details")
+
+
+class VpcPairsVxlan(NDVpcPairNestedModel):
+    """VPC pairs VXLAN wrapper."""
+
+    component_type: ComponentType = Field(default=ComponentType.VXLAN, alias="componentType", description="Type of the component")
+    vxlan: VpcPairsVxlanBase = Field(alias="vxlan", description="VXLAN details")
+
+
+class VpcPairsOverlay(NDVpcPairNestedModel):
+    """VPC overlay details wrapper."""
+
+    component_type: ComponentType = Field(default=ComponentType.OVERLAY, alias="componentType", description="Type of the component")
+    overlay: VpcPairsOverlayBase = Field(alias="overlay", description="Overlay details")
+
+
+class VpcPairsInventory(NDVpcPairNestedModel):
+    """VPC pairs inventory details wrapper."""
+
+    component_type: ComponentType = Field(default=ComponentType.INVENTORY, alias="componentType", description="Type of the component")
+    inventory: VpcPairsInventoryBase = Field(alias="inventory", description="Inventory details")
+
+
+class FullOverview(NDVpcPairNestedModel):
+    """Full VPC overview response."""
+
+    component_type: ComponentType = Field(default=ComponentType.FULL, alias="componentType", description="Type of the component")
+    anomalies: VpcPairAnomaliesBase = Field(alias="anomalies", description="VPC pair anomalies")
+    health: VpcPairHealthBase = Field(alias="health", description="VPC pair health")
+    module: VpcPairsModuleBase = Field(alias="module", description="VPC pair module")
+    vxlan: VpcPairsVxlanBase = Field(alias="vxlan", description="VPC pair VXLAN")
+    overlay: VpcPairsOverlayBase = Field(alias="overlay", description="VPC pair overlay")
+    pairs_info: VpcPairsInfoBase = Field(alias="pairsInfo", description="VPC pair info")
+    inventory: VpcPairsInventoryBase = Field(alias="inventory", description="VPC pair inventory")
+
+
+# ============================================================================
+# BACKWARD COMPATIBILITY CONTAINER (NdVpcPairSchema)
+# ============================================================================
+
+
+class NdVpcPairSchema:
+    """
+    Backward compatibility container for all VPC pair schemas.
+
+    This provides a namespace similar to the old structure where models
+    were nested inside a container class. Allows imports like:
+
+        from model_playbook_vpc_pair_nested import NdVpcPairSchema
+        vpc_pair = NdVpcPairSchema.VpcPairBase(**data)
+    """
+
+    # Base classes
+    VpcPairBaseModel = NDVpcPairBaseModel
+    VpcPairNestedModel = NDVpcPairNestedModel
+
+    # Enumerations
+    VpcRole = VpcRole
+    TemplateType = TemplateType
+    KeepAliveVrf = KeepAliveVrf
+    VpcAction = VpcAction
+    ComponentType = ComponentType
+
+    # Nested helper models
+    SwitchInfo = SwitchInfo
+    SwitchIntInfo = SwitchIntInfo
+    SwitchBoolInfo = SwitchBoolInfo
+    SyncCounts = SyncCounts
+    AnomaliesCount = AnomaliesCount
+    HealthMetrics = HealthMetrics
+    ResourceMetrics = ResourceMetrics
+    InterfaceStatusCounts = InterfaceStatusCounts
+    LogicalInterfaceCounts = LogicalInterfaceCounts
+    ResponseCounts = ResponseCounts
+
+    # VPC pair details (template configuration)
+    VpcPairDetailsDefault = VpcPairDetailsDefault
+    VpcPairDetailsCustom = VpcPairDetailsCustom
+
+    # Configuration domain
+    VpcPairBase = VpcPairBase
+    VpcPairingRequest = VpcPairingRequest
+    VpcUnpairingRequest = VpcUnpairingRequest
+
+    # Monitoring domain
+    VpcPairsInfoBase = VpcPairsInfoBase
+    VpcPairHealthBase = VpcPairHealthBase
+    VpcPairsVxlanBase = VpcPairsVxlanBase
+    VpcPairsOverlayBase = VpcPairsOverlayBase
+    VpcPairsInventoryBase = VpcPairsInventoryBase
+    VpcPairsModuleBase = VpcPairsModuleBase
+    VpcPairAnomaliesBase = VpcPairAnomaliesBase
+
+    # Monitoring domain wrappers
+    VpcPairsInfo = VpcPairsInfo
+    VpcPairHealth = VpcPairHealth
+    VpcPairsModule = VpcPairsModule
+    VpcPairAnomalies = VpcPairAnomalies
+    VpcPairsVxlan = VpcPairsVxlan
+    VpcPairsOverlay = VpcPairsOverlay
+    VpcPairsInventory = VpcPairsInventory
+    FullOverview = FullOverview
+
+    # Consistency domain
+    CommonVpcConsistencyParams = CommonVpcConsistencyParams
+    VpcPairConsistency = VpcPairConsistency
+
+    # Validation domain
+    VpcPairRecommendation = VpcPairRecommendation
+
+    # Inventory domain
+    VpcPairBaseSwitchDetails = VpcPairBaseSwitchDetails
+    VpcPairIntended = VpcPairIntended
+    VpcPairDiscovered = VpcPairDiscovered
+    Metadata = Metadata
+    VpcPairsResponse = VpcPairsResponse
