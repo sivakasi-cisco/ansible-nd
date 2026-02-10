@@ -12,6 +12,7 @@ __author__ = "Neil John"
 
 DOCUMENTATION = """
 ---
+
 module: nd_manage_vpc_pairs
 short_description: Manage vPC pairs in Nexus devices.
 version_added: "1.0.0"
@@ -418,8 +419,8 @@ class GetHave:
         self.class_name = self.__class__.__name__
         self.log = logger or logging.getLogger(f"nd.{self.class_name}")
         self.fabric = nd.params.get("fabric")
-        # self.path = f"/api/v1/manage/fabrics/{self.fabric}/vpcPairs"
-        self.recommendation_path = "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/recommendation?serialNumber="
+        # Use ND Manage 4.x API path for VPC pair recommendations
+        self.recommendation_path_template = f"/api/v1/manage/fabrics/{self.fabric}/switches/{{switchId}}/vpcPairRecommendation"
         self.verb = "GET"
         self.vpc_pair_state = {}
         self.have = []
@@ -518,12 +519,16 @@ class GetHave:
         msg = f"ENTERED: {self.class_name}.{method_name}"
         self.log.debug(msg)
 
-        path = f"{self.recommendation_path}{switchId}"
+        # Use ND Manage 4.x API endpoint for VPC pair recommendations
+        path = self.recommendation_path_template.format(switchId=switchId)
+        self.log.debug(f"Fetching VPC pair recommendation from: {path}")
         vpc_pair_recommendation = self.nd.request(path, method=self.verb)
 
-        for sw in vpc_pair_recommendation:
-            if sw["currentPeer"] == True:
-                return sw
+        # Handle response - look for current peer in the recommendations list
+        if isinstance(vpc_pair_recommendation, list):
+            for sw in vpc_pair_recommendation:
+                if sw.get("currentPeer") or sw.get("isCurrentPeer"):
+                    return sw
         return None
 
 
@@ -1388,8 +1393,9 @@ class Deleted:
         self.log = logger or logging.getLogger(f"nd.{self.class_name}")
 
         self.common = common_util
-        self.verb = "DELETE"
-        self.path = "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair?serialNumber={peer1SwitchId}"
+        # Use ND Manage 4.x API - deletion uses PUT with vpcAction="unPair"
+        self.verb = "PUT"
+        self.path_template = "/api/v1/manage/fabrics/{fabric}/switches/{switchId}/vpcPair"
 
         # Create a list of vPC pair keys to be deleted that are in both self.common.want and self.have
 
@@ -1455,7 +1461,22 @@ class Deleted:
                         msg=f"vPC pair {vpc_pair_key} cannot be deleted because it is in use by {count} VRFs. Detach these VRFs first, maybe using the VRFs module.",
                     )
 
-            self.common.requests[vpc_pair_key] = {"verb": self.verb, "path": self.path.format(peer1SwitchId=vpc_pair.switch_id)}
+            # Build deletion payload with vpcAction="unPair" for ND Manage 4.x API
+            deletion_payload = {"vpcAction": "unPair"}
+
+            # Validate using VpcUnpairingRequest schema
+            try:
+                unpair_request = NdVpcPairSchema.VpcUnpairingRequest(**deletion_payload)
+                payload = unpair_request.model_dump(by_alias=True, exclude_none=True, mode="json")
+            except Exception as e:
+                self.log.warning(f"Failed to validate with VpcUnpairingRequest schema: {e}, using raw payload")
+                payload = deletion_payload
+
+            self.common.requests[vpc_pair_key] = {
+                "verb": self.verb,
+                "path": self.path_template.format(fabric=self.common.fabric, switchId=vpc_pair.switch_id),
+                "payload": payload,
+            }
 
     def collect_deletion_requests(self):
         """
