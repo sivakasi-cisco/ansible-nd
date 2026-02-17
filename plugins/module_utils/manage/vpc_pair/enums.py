@@ -25,25 +25,11 @@ __author__ = "Sivakami Sivaraman"
 
 from enum import Enum
 
+# Import HttpVerbEnum from top-level enums module (RestSend infrastructure)
+from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
 
-class VerbEnum(str, Enum):
-    """
-    # Summary
-
-    Enum for HTTP verb values used in endpoints.
-
-    ## Members
-
-    - GET: Represents the HTTP GET method.
-    - POST: Represents the HTTP POST method.
-    - PUT: Represents the HTTP PUT method.
-    - DELETE: Represents the HTTP DELETE method.
-    """
-
-    GET = "GET"
-    POST = "POST"
-    PUT = "PUT"
-    DELETE = "DELETE"
+# Backward compatibility alias - Use HttpVerbEnum directly in new code
+VerbEnum = HttpVerbEnum
 
 
 class VpcActionEnum(str, Enum):

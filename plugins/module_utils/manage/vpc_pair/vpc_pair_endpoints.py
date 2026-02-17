@@ -37,24 +37,8 @@ from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.endpoint_
     TicketIdMixin,
     ViewMixin,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import VerbEnum
-
-if TYPE_CHECKING:
-    from pydantic import BaseModel, ConfigDict, Field
-else:
-    try:
-        from pydantic import BaseModel, ConfigDict, Field
-    except ImportError:
-        # Fallback for environments without pydantic
-        class BaseModel:
-            pass
-
-        def ConfigDict(*args, **kwargs):
-            return {}
-
-        def Field(*args, **kwargs):
-            return None
-
+from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
+from ansible_collections.cisco.nd.plugins.module_utils.pydantic_compat import BaseModel, ConfigDict, Field
 
 # Common config for basic validation
 COMMON_CONFIG = ConfigDict(validate_assignment=True)
@@ -125,9 +109,9 @@ class EpVpcPairGet(_EpVpcPairBase):
     class_name: Literal["EpVpcPairGet"] = Field(default="EpVpcPairGet", description="Class name for backward compatibility")
 
     @property
-    def verb(self) -> VerbEnum:
+    def verb(self) -> HttpVerbEnum:
         """Return the HTTP verb for this endpoint."""
-        return VerbEnum.GET
+        return HttpVerbEnum.GET
 
 
 class EpVpcPairPut(_EpVpcPairBase, TicketIdMixin):
@@ -165,9 +149,9 @@ class EpVpcPairPut(_EpVpcPairBase, TicketIdMixin):
     class_name: Literal["EpVpcPairPut"] = Field(default="EpVpcPairPut", description="Class name for backward compatibility")
 
     @property
-    def verb(self) -> VerbEnum:
+    def verb(self) -> HttpVerbEnum:
         """Return the HTTP verb for this endpoint."""
-        return VerbEnum.PUT
+        return HttpVerbEnum.PUT
 
 
 # ============================================================================
@@ -222,9 +206,9 @@ class EpVpcPairSupportGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Comp
         return VpcPairBasePath.vpc_pair_support(self.fabric_name, self.switch_id)
 
     @property
-    def verb(self) -> VerbEnum:
+    def verb(self) -> HttpVerbEnum:
         """Return the HTTP verb for this endpoint."""
-        return VerbEnum.GET
+        return HttpVerbEnum.GET
 
 
 # ============================================================================
@@ -279,9 +263,9 @@ class EpVpcPairOverviewGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Com
         return VpcPairBasePath.vpc_pair_overview(self.fabric_name, self.switch_id)
 
     @property
-    def verb(self) -> VerbEnum:
+    def verb(self) -> HttpVerbEnum:
         """Return the HTTP verb for this endpoint."""
-        return VerbEnum.GET
+        return HttpVerbEnum.GET
 
 
 # ============================================================================
@@ -337,9 +321,9 @@ class EpVpcPairRecommendationGet(FabricNameMixin, SwitchIdMixin, FromClusterMixi
         return VpcPairBasePath.vpc_pair_recommendation(self.fabric_name, self.switch_id)
 
     @property
-    def verb(self) -> VerbEnum:
+    def verb(self) -> HttpVerbEnum:
         """Return the HTTP verb for this endpoint."""
-        return VerbEnum.GET
+        return HttpVerbEnum.GET
 
 
 # ============================================================================
@@ -388,9 +372,9 @@ class EpVpcPairConsistencyGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, 
         return VpcPairBasePath.vpc_pair_consistency(self.fabric_name, self.switch_id)
 
     @property
-    def verb(self) -> VerbEnum:
+    def verb(self) -> HttpVerbEnum:
         """Return the HTTP verb for this endpoint."""
-        return VerbEnum.GET
+        return HttpVerbEnum.GET
 
 
 # ============================================================================
@@ -452,6 +436,6 @@ class EpVpcPairsListGet(FabricNameMixin, FromClusterMixin, FilterMixin, Paginati
         return VpcPairBasePath.vpc_pairs_list(self.fabric_name)
 
     @property
-    def verb(self) -> VerbEnum:
+    def verb(self) -> HttpVerbEnum:
         """Return the HTTP verb for this endpoint."""
-        return VerbEnum.GET
+        return HttpVerbEnum.GET

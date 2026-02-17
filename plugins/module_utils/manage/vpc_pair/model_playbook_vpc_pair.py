@@ -321,7 +321,7 @@ class VpcPairDetailsDefault(NDVpcPairNestedModel):
     OpenAPI: vpcPairDetailsDefault
     """
 
-    type: TemplateType = Field(default=TemplateType.DEFAULT, alias="type", description="Template type")
+    type: Literal["default"] = Field(default="default", alias="type", description="Template type")
     domain_id: Optional[FlexibleInt] = Field(default=None, alias="domainId", description="VPC domain ID")
     switch_keep_alive_local_ip: Optional[str] = Field(default=None, alias="switchKeepAliveLocalIp", description="Peer-1 keep-alive IP")
     peer_switch_keep_alive_local_ip: Optional[str] = Field(default=None, alias="peerSwitchKeepAliveLocalIp", description="Peer-2 keep-alive IP")
@@ -362,7 +362,7 @@ class VpcPairDetailsCustom(NDVpcPairNestedModel):
     OpenAPI: vpcPairDetailsCustom
     """
 
-    type: TemplateType = Field(default=TemplateType.CUSTOM, alias="type", description="Template type")
+    type: Literal["custom"] = Field(default="custom", alias="type", description="Template type")
     template_name: str = Field(alias="templateName", description="Name of the custom template")
     template_config: Dict[str, Any] = Field(alias="templateConfig", description="Free-form configuration")
 

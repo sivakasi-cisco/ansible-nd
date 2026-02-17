@@ -77,6 +77,12 @@ options:
                 - When false, physical pair link is used.
                 type: bool
                 default: true
+notes:
+    - This module uses the RestSend architecture for improved testability and reliability
+    - RestSend provides protocol-based HTTP abstraction with automatic retry logic
+    - Results are aggregated using the Results class for consistent output format
+    - Check mode is fully supported via RestSend's built-in check_mode handling
+    - The dry_run parameter maps to Ansible's check_mode internally
 """
 
 EXAMPLES = """
@@ -313,6 +319,40 @@ pending_delete_pairs_not_in_delete:
             "useVirtualPeerLink": true
         }
     ]
+result:
+    description: List of parsed results from RestSend with success/changed/found flags and sequence numbers for request tracking
+    type: list
+    returned: always
+    sample: [
+        {
+            "success": true,
+            "changed": true,
+            "sequence_number": 1
+        },
+        {
+            "success": true,
+            "changed": false,
+            "found": true,
+            "sequence_number": 2
+        }
+    ]
+metadata:
+    description: List of operation metadata with vpc_pair_key, operation type, and API path information
+    type: list
+    returned: always
+    sample: [
+        {
+            "vpc_pair_key": "FDO23040Q85-FDO23040Q86",
+            "operation": "create",
+            "path": "/api/v1/manage/fabrics/fabric1/switches/FDO23040Q85/vpcPair",
+            "sequence_number": 1
+        }
+    ]
+failed:
+    description: Whether any operation failed during execution
+    type: bool
+    returned: always
+    sample: false
 """
 
 import inspect
@@ -325,6 +365,17 @@ import json
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.cisco.nd.plugins.module_utils.nd import NDModule
 from ansible.module_utils.basic import missing_required_lib
+
+# RestSend infrastructure imports
+from ansible_collections.cisco.nd.plugins.module_utils.nd_v2 import (
+    NDModule as NDModuleV2,
+    NDModuleError,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.enums import (
+    HttpVerbEnum,
+    OperationType,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.results import Results
 
 from ..module_utils.common.log import Log
 from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.model_playbook_vpc_pair import NdVpcPairSchema
@@ -370,7 +421,7 @@ class UpdateInventory:
         self.nd = nd
         self.switches = []
         self.logger = logger or logging.getLogger(f"nd.{self.class_name}")
-        self.fabric = self.nd.params.get('fabric')
+        self.fabric = self.nd.params.get("fabric")
         self.path = VpcPairBasePath.fabrics(self.fabric, "switches")
         self.verb = "GET"
         self.sw_sn_from_ip = {}
@@ -417,11 +468,7 @@ class UpdateInventory:
 
         # Create switch ip to serial number mapping with error handling
         try:
-            self.sw_sn_from_ip = {
-                sw["fabricManagementIp"]: sw["serialNumber"]
-                for sw in self.switches
-                if "fabricManagementIp" in sw and "serialNumber" in sw
-            }
+            self.sw_sn_from_ip = {sw["fabricManagementIp"]: sw["serialNumber"] for sw in self.switches if "fabricManagementIp" in sw and "serialNumber" in sw}
             self.logger.info("Switch IP to Serial Number mapping: %s", self.sw_sn_from_ip)
         except (KeyError, TypeError) as error:
             self.logger.warning(f"Error creating IP to SN mapping: {error}. Continuing with empty mapping.")
@@ -606,8 +653,7 @@ class GetHave:
                         return sw
             else:
                 self.log.warning(
-                    f"Expected list response from VPC pair recommendation for switch {switchId}, "
-                    f"got {type(vpc_pair_recommendation).__name__}"
+                    f"Expected list response from VPC pair recommendation for switch {switchId}, " f"got {type(vpc_pair_recommendation).__name__}"
                 )
 
             return None
@@ -1657,9 +1703,7 @@ class Deleted:
 
                 # Validate response
                 if response is None:
-                    self.common.nd.fail_json(
-                        msg=f"Received None response when checking vPC pair {vpc_pair_key} overview at {overview_path}"
-                    )
+                    self.common.nd.fail_json(msg=f"Received None response when checking vPC pair {vpc_pair_key} overview at {overview_path}")
 
                 if not isinstance(response, dict):
                     self.common.nd.fail_json(
@@ -1725,7 +1769,9 @@ class Deleted:
                     else:
                         self.log.warning(f"logicalInterfaces is not a dict for {vpc_pair_key}, skipping interface validation")
                 else:
-                    self.log.warning(f"Inventory data not available in overview response for {vpc_pair_key}. Proceeding with deletion (may fail if vPC interfaces exist).")
+                    self.log.warning(
+                        f"Inventory data not available in overview response for {vpc_pair_key}. Proceeding with deletion (may fail if vPC interfaces exist)."
+                    )
             except (KeyError, ValueError, TypeError) as error:
                 self.log.warning(f"Error checking vPC interface count for {vpc_pair_key}: {error}. Proceeding with deletion.")
 
@@ -1937,9 +1983,7 @@ class Overridden:
 
                 # Validate response
                 if response is None:
-                    self.common.nd.fail_json(
-                        msg=f"Received None response when checking vPC pair {vpc_pair_key} overview at {overview_path}"
-                    )
+                    self.common.nd.fail_json(msg=f"Received None response when checking vPC pair {vpc_pair_key} overview at {overview_path}")
 
                 if not isinstance(response, dict):
                     self.common.nd.fail_json(
@@ -2005,7 +2049,9 @@ class Overridden:
                     else:
                         self.log.warning(f"logicalInterfaces is not a dict for {vpc_pair_key}, skipping interface validation")
                 else:
-                    self.log.warning(f"Inventory data not available in overview response for {vpc_pair_key}. Proceeding with deletion (may fail if vPC interfaces exist).")
+                    self.log.warning(
+                        f"Inventory data not available in overview response for {vpc_pair_key}. Proceeding with deletion (may fail if vPC interfaces exist)."
+                    )
             except (KeyError, ValueError, TypeError) as error:
                 self.log.warning(f"Error checking vPC interface count for {vpc_pair_key}: {error}. Proceeding with deletion.")
 
@@ -2157,6 +2203,197 @@ class Query:
         return results
 
 
+# ============================================================================
+# RestSend Helper Functions
+# ============================================================================
+
+
+def execute_request_with_restsend(nd: NDModuleV2, results: Results, vpc_pair_key: str, request_data: dict, mainlog) -> None:
+    """
+    Execute a single VPC pair request using RestSend pattern.
+
+    Args:
+        nd: NDModuleV2 instance
+        results: Results aggregation instance
+        vpc_pair_key: VPC pair identifier (e.g., "FDO1-FDO2")
+        request_data: Dict with verb, path, payload, operation
+        mainlog: Logger instance
+    """
+    verb_str = request_data["verb"]
+    path = request_data["path"]
+    payload = request_data.get("payload")
+
+    # Convert string verb to HttpVerbEnum
+    verb = HttpVerbEnum(verb_str)
+
+    # Build metadata
+    metadata = {"vpc_pair_key": vpc_pair_key, "operation": request_data.get("operation", verb_str), "path": path}
+
+    mainlog.info("Executing request for VPC pair %s: %s %s", vpc_pair_key, verb_str, path)
+    if payload:
+        mainlog.debug("Payload: %s", json.dumps(payload, indent=2))
+
+    try:
+        # Use nd_v2.request() which internally uses RestSend
+        data = nd.request(path, verb, payload)
+
+        # Build response
+        response = {
+            "RETURN_CODE": nd.status,
+            "METHOD": nd.method,
+            "REQUEST_PATH": nd.path,
+            "MESSAGE": nd.response,
+            "DATA": data,
+        }
+
+        # Build result (success based on nd_v2 not raising exception)
+        result = {
+            "success": True,
+            "changed": verb in [HttpVerbEnum.POST, HttpVerbEnum.PUT, HttpVerbEnum.DELETE],
+        }
+
+        # Build diff
+        diff = build_diff_for_request(verb, vpc_pair_key, payload)
+
+        mainlog.info("Request successful for VPC pair %s", vpc_pair_key)
+
+    except NDModuleError as error:
+        # Build error response
+        response = {
+            "RETURN_CODE": error.status if error.status else -1,
+            "MESSAGE": error.msg,
+            "REQUEST_PATH": path,
+            "METHOD": verb_str,
+            "DATA": error.data if error.data else {},
+        }
+
+        result = {"success": False, "changed": False}
+        diff = {}
+
+        mainlog.error("Request failed for VPC pair %s: %s", vpc_pair_key, error.msg)
+
+    # Register with Results
+    results.response_current = response
+    results.result_current = result
+    results.diff_current = diff
+    results.metadata_current = metadata
+    results.register_task_result()
+
+
+def build_diff_for_request(verb: HttpVerbEnum, vpc_pair_key: str, payload: dict) -> dict:
+    """
+    Build diff dict for a request (maintains current output format).
+
+    Args:
+        verb: HTTP verb for the request
+        vpc_pair_key: VPC pair identifier
+        payload: Request payload
+
+    Returns:
+        Diff dict for this request
+    """
+    switch_ids = vpc_pair_key.replace("delete_", "").split("-")
+
+    if verb == HttpVerbEnum.DELETE:
+        return {
+            "peer1SwitchId": switch_ids[0] if len(switch_ids) > 0 else "",
+            "peer2SwitchId": switch_ids[1] if len(switch_ids) > 1 else "",
+        }
+    elif verb == HttpVerbEnum.PUT:
+        diff_entry = {
+            "peer1SwitchId": switch_ids[0] if len(switch_ids) > 0 else "",
+            "peer2SwitchId": switch_ids[1] if len(switch_ids) > 1 else "",
+        }
+        if payload:
+            diff_entry.update(payload)
+        return diff_entry
+
+    return {}
+
+
+def deploy_fabric_with_restsend(nd: NDModuleV2, results: Results, fabric: str, mainlog) -> None:
+    """
+    Deploy fabric changes using RestSend pattern.
+
+    Args:
+        nd: NDModuleV2 instance
+        results: Results aggregation instance
+        fabric: Fabric name
+        mainlog: Logger instance
+    """
+    mainlog.info("Starting fabric deployment for %s", fabric)
+
+    # Step 1: Save config
+    save_path = VpcPairBasePath.config_save(fabric)
+    mainlog.info("Saving fabric configuration: %s", save_path)
+
+    try:
+        nd.request(save_path, HttpVerbEnum.POST, {})
+
+        results.response_current = {
+            "RETURN_CODE": nd.status,
+            "METHOD": "POST",
+            "REQUEST_PATH": save_path,
+            "MESSAGE": "Config saved successfully",
+            "DATA": {},
+        }
+        results.result_current = {"success": True, "changed": True}
+        results.metadata_current = {"operation": "CONFIG_SAVE", "fabric": fabric}
+        results.register_task_result()
+
+        mainlog.info("Configuration saved successfully")
+
+    except NDModuleError as error:
+        # Log warning but continue to deploy
+        mainlog.warning("Config save failed: %s", error.msg)
+
+        results.response_current = {
+            "RETURN_CODE": error.status if error.status else -1,
+            "MESSAGE": error.msg,
+            "REQUEST_PATH": save_path,
+            "METHOD": "POST",
+            "DATA": {},
+        }
+        results.result_current = {"success": False, "changed": False}
+        results.metadata_current = {"operation": "CONFIG_SAVE_FAILED", "fabric": fabric}
+        results.register_task_result()
+
+    # Step 2: Deploy
+    deploy_path = f"{VpcPairBasePath.fabrics(fabric, 'actions/deploy')}?forceShowRun=true"
+    mainlog.info("Deploying fabric configuration: %s", deploy_path)
+
+    try:
+        nd.request(deploy_path, HttpVerbEnum.POST, {})
+
+        results.response_current = {
+            "RETURN_CODE": nd.status,
+            "METHOD": "POST",
+            "REQUEST_PATH": deploy_path,
+            "MESSAGE": "Deployment successful",
+            "DATA": {},
+        }
+        results.result_current = {"success": True, "changed": True}
+        results.metadata_current = {"operation": "DEPLOY", "fabric": fabric}
+        results.register_task_result()
+
+        mainlog.info("Deployment completed successfully")
+
+    except NDModuleError as error:
+        mainlog.error("Deployment failed: %s", error.msg)
+
+        results.response_current = {
+            "RETURN_CODE": error.status if error.status else -1,
+            "MESSAGE": error.msg,
+            "REQUEST_PATH": deploy_path,
+            "METHOD": "POST",
+            "DATA": {},
+        }
+        results.result_current = {"success": False, "changed": False}
+        results.metadata_current = {"operation": "DEPLOY_FAILED", "fabric": fabric}
+        results.register_task_result()
+        raise  # Re-raise to fail the module
+
+
 def main():
     argument_spec = {}
     argument_spec.update(
@@ -2190,6 +2427,10 @@ def main():
     if module.params.get("state") == "query" and module.params.get("dry_run"):
         module.fail_json(msg="Dry_run parameter cannot be used with 'query' state")
 
+    # Map dry_run to check_mode for RestSend integration
+    if module.params.get("dry_run"):
+        module.check_mode = True
+
     # Logging setup
     try:
         log = Log()
@@ -2201,7 +2442,27 @@ def main():
     mainlog.info("---------------------------------------------")
     mainlog.info("Starting cisco.nd.nd_manage_vpc_pairs module")
     mainlog.info("---------------------------------------------\n")
-    nd = NDModule(module)
+
+    # Initialize Results for RestSend aggregation
+    state = module.params.get("state")
+    results = Results()
+    results.state = state
+    results.check_mode = module.check_mode
+    results.action = "vpc_pair_management"
+
+    # Determine operation type from state
+    if state == "query":
+        results.operation_type = OperationType.QUERY
+    elif state in ["merged", "replaced"]:
+        results.operation_type = OperationType.UPDATE
+    elif state == "deleted":
+        results.operation_type = OperationType.DELETE
+    elif state == "overridden":
+        results.operation_type = OperationType.UPDATE
+
+    # Initialize both nd modules - legacy for inventory, v2 for requests
+    nd = NDModule(module)  # Legacy - used by inventory classes (to be migrated in Task #4)
+    nd_v2 = NDModuleV2(module)  # New - used for RestSend requests
     task_params = nd.params
     mainlog.debug("Task parameters: %s", task_params)
 
@@ -2278,113 +2539,60 @@ def main():
         except Exception as error:
             module.fail_json(msg=f"Failed to gather vPC pair state: {str(error)}")
 
-    # Process all the requests from task.common.requests
+    # Process all the requests from task.common.requests using RestSend pattern
     # Sample entry:
     #   {'FDO23040Q85-FDO23040Q86': {'verb': 'DELETE', 'path': '/api/v1/manage/vpc-pairs/FDO23040Q85/FDO23040Q86', 'payload': ''}}
     if task.common.requests:
+        mainlog.info("Processing %d VPC pair requests using RestSend", len(task.common.requests))
         for vpc_pair_key, request_data in task.common.requests.items():
-            verb = request_data["verb"]
-            path = request_data["path"]
-            payload = request_data.get("payload", {})
             mainlog.debug("Processing request for vPC pair key: %s", vpc_pair_key)
-            mainlog.debug("Verb: %s, Path: %s, Payload: %s", verb, path, payload)
-
-            # Add payload/config to diff grouped by operation type
-            if verb in ["PUT", "DELETE"]:
-                # Ensure the operation key exists in diff
-                if verb not in task.common.result["diff"]:
-                    task.common.result["diff"][verb] = []
-
-                if verb == "DELETE":
-                    # For DELETE operations, extract switch IDs from vpc_pair_key or path
-                    switch_ids = vpc_pair_key.replace("delete_", "").split("-")
-                    if len(switch_ids) >= 2:
-                        delete_config = {"peer1SwitchId": switch_ids[0], "peer2SwitchId": switch_ids[1]}
-                    else:
-                        # Fallback: try to extract from path or use vpc_pair_key
-                        delete_config = {"vpc_pair_key": vpc_pair_key}
-                    task.common.result["diff"][verb].append(delete_config)
-                elif verb == "PUT":
-                    # For PUT operations, include switch IDs along with the payload
-                    switch_ids = vpc_pair_key.replace("delete_", "").split("-")
-                    if len(switch_ids) >= 2 and payload:
-                        put_config = {"peer1SwitchId": switch_ids[0], "peer2SwitchId": switch_ids[1]}
-                        # Merge the payload into the config
-                        put_config.update(payload)
-                        task.common.result["diff"][verb].append(put_config)
-                    elif payload:
-                        # Fallback: just use payload if switch IDs can't be extracted
-                        task.common.result["diff"][verb].append(payload)
-
-            # Pretty-print the payload for easier log reading
-            pretty_payload = json.dumps(payload, indent=2, sort_keys=True)
-
-            if task.common.dry_run:
-                # In dry run mode, don't make actual API calls but log what would be done
-                mainlog.info("DRY RUN: Would call nd.request with path: %s, verb: %s, and payload:\n%s", path, verb, pretty_payload)
-
-                # Store dry run request information
-                response_entry = {
-                    "vpc_pair_key": vpc_pair_key,
-                    "operation": verb,
-                    "path": path,
-                    "payload": payload,
-                    "dry_run": True,
-                    "response": "DRY RUN - No actual API call made",
-                }
-            else:
-                # Normal mode - make actual API request
-                mainlog.info("Calling nd.request with path: %s, verb: %s, and payload:\n%s", path, verb, pretty_payload)
-
-                try:
-                    # Make the API request
-                    response = nd.request(path, method=verb, data=payload if payload else None)
-
-                    # Validate response
-                    if response is None:
-                        mainlog.warning(f"Received None response for vPC pair {vpc_pair_key} - treating as success")
-                        response = {"status": "success", "message": "Operation completed (no response body)"}
-
-                    mainlog.debug("Response from nd.request: %s", response)
-
-                    # Store response with additional context
-                    response_entry = {"vpc_pair_key": vpc_pair_key, "operation": verb, "path": path, "response": response}
-
-                except Exception as error:
-                    error_msg = f"Failed to execute {verb} request for vPC pair {vpc_pair_key} at {path}: {str(error)}"
-                    mainlog.error(error_msg)
-                    module.fail_json(
-                        msg=error_msg,
-                        vpc_pair_key=vpc_pair_key,
-                        operation=verb,
-                        path=path,
-                        payload=payload,
-                    )
-
-            task.common.result["response"].append(response_entry)
-
-            # Only mark as changed if not in dry run mode
-            if not task.common.dry_run:
-                task.common.result["changed"] = True
+            execute_request_with_restsend(nd_v2, results, vpc_pair_key, request_data, mainlog)
     else:
         mainlog.info("No requests to process")
 
     # Deploy fabric changes if deploy parameter is True and state is not query
     if task.common.deploy and task.common.state != "query":
         try:
-            if task.common.dry_run:
-                mainlog.info("DRY RUN: Showing deployment information without executing")
+            if task.common.dry_run or module.check_mode:
+                mainlog.info("CHECK MODE: Showing deployment information without executing")
                 task.common.show_dry_run_deployment_info()
             else:
                 mainlog.info("Deploy parameter is True, deploying fabric configuration changes")
-                task.common.deploy_fabric()
+                deploy_fabric_with_restsend(nd_v2, results, task.common.fabric, mainlog)
+        except NDModuleError as error:
+            mainlog.error("Deployment failed with NDModuleError: %s", error.msg)
+            # Results already updated by deploy_fabric_with_restsend before raising
+            results.build_final_result()
+            module.fail_json(**results.final_result)
         except Exception as error:
-            # deploy_fabric() already handles exceptions and calls fail_json internally
-            # This is a safety catch in case something bypasses that
-            mainlog.error(f"Unexpected error during deployment: {error}")
+            mainlog.error("Unexpected error during deployment: %s", error)
             module.fail_json(msg=f"Deployment failed with unexpected error: {str(error)}")
 
-    module.exit_json(**task.common.result)
+    # Build final result using Results aggregator
+    results.build_final_result()
+
+    # For backward compatibility, merge legacy result structure if needed
+    # The Results class provides: changed, failed, diff, response, result, metadata
+    # Legacy code expects: changed, diff (grouped by verb), response, query, warnings
+    final_output = results.final_result
+
+    # For query state, preserve the query results from task.common.result
+    if isinstance(task, Query):
+        if "query" in task.common.result:
+            final_output["query"] = task.common.result["query"]
+
+    # Preserve warnings if any
+    if "warnings" in task.common.result:
+        final_output["warnings"] = task.common.result["warnings"]
+
+    # Preserve IP to SN mapping if present
+    if "ip_to_sn_mapping" in task.common.result:
+        final_output["ip_to_sn_mapping"] = task.common.result["ip_to_sn_mapping"]
+
+    # Exit based on results
+    if True in results.failed:
+        module.fail_json(**final_output)
+    module.exit_json(**final_output)
 
 
 if __name__ == "__main__":
