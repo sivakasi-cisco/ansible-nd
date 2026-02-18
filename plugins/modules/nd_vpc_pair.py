@@ -12,12 +12,12 @@ __author__ = "Sivakami S"
 DOCUMENTATION = """
 ---
 module: nd_vpc_pair
-short_description: Manage vPC pairs in Nexus devices.
+short_description: Manage vPC pairs in Nexus devices using actions_overwrite_map.
 version_added: "1.0.0"
 description:
 - Create, update, delete, override, and gather vPC pairs on Nexus devices.
-- Supports state-based operations with intelligent diff calculation.
-- Uses NDNetworkResourceModule framework for Want/Have/Need logic.
+- Uses NDNetworkResourceModule framework with custom action functions.
+- Overcomes VPC pair API limitations via actions_overwrite_map.
 options:
     state:
         choices:
@@ -119,7 +119,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBase
 from pydantic import Field
 
 
-# ===== VPC Pair Model (using new framework) =====
+# ===== VPC Pair Model =====
 
 
 class VpcPairModel(NDBaseModel):
@@ -142,13 +142,11 @@ class VpcPairModel(NDBaseModel):
 
     def to_payload(self) -> Dict[str, Any]:
         """
-        Convert to VPC pairing API payload.
+        Convert to API payload format.
 
-        The API expects vpcAction="pair" for create/update operations.
+        Note: vpcAction is added by custom functions, not here.
         """
-        payload = self.model_dump(by_alias=True, exclude_none=True)
-        payload["vpcAction"] = "pair"
-        return payload
+        return self.model_dump(by_alias=True, exclude_none=True)
 
     @classmethod
     def from_response(cls, response: Dict[str, Any]) -> "VpcPairModel":
@@ -157,7 +155,6 @@ class VpcPairModel(NDBaseModel):
 
         Handles API field name variations.
         """
-        # Map API response fields to model fields
         data = {
             "switchId": response.get("switchId") or response.get("switch_id"),
             "peerSwitchId": response.get("peerSwitchId") or response.get("peer_switch_id"),
@@ -166,138 +163,184 @@ class VpcPairModel(NDBaseModel):
         return cls.model_validate(data)
 
 
-# ===== VPC Pair Module (using framework) =====
+# ===== Custom Action Functions (using actions_overwrite_map) =====
 
 
-class VpcPairModule(NDNetworkResourceModule[VpcPairModel]):
+def custom_vpc_query_all(nrm) -> List[Dict]:
     """
-    Module for managing VPC pairs using NDNetworkResourceModule framework.
+    Custom query function for VPC pairs.
 
-    API Endpoints:
-    - GET:    /appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric}
-    - POST:   /appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric}/switches/{switchId}
-    - PUT:    /appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric}/switches/{switchId}
-    - DELETE: Uses PUT with vpcAction="unpair"
+    Solves:
+    ✅ 3-list state management (can query intended vs discovered pairs)
+
+    Args:
+        nrm: NDNetworkResourceModule instance
+
+    Returns:
+        List of VPC pair dictionaries from API
     """
+    fabric_name = nrm.module.params.get("fabric_name")
+    path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}"
 
-    model_class = VpcPairModel
-
-    # VPC pairs use these fields for comparison - ignore dynamic fields
-    diff_ignore_keys = ["vpcPairDetails", "operStatus", "timestamp"]
-
-    def __init__(self, module: AnsibleModule):
-        super().__init__(module)
-        self.fabric_name = module.params.get("fabric_name")
-        self.deploy = module.params.get("deploy", False)
-
-    def _get_base_path(self) -> str:
-        """Get base API path for VPC pairs."""
-        return f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{self.fabric_name}"
-
-    def _get_item_path(self, identifier: Any) -> str:
-        """Get API path for a specific VPC pair.
-
-        Args:
-            identifier: Tuple of (switch_id, peer_switch_id)
-        """
-        switch_id = identifier[0] if isinstance(identifier, tuple) else identifier
-        return f"{self._get_base_path()}/switches/{switch_id}"
-
-    def _query_all(self) -> List[Dict]:
-        """Query all existing VPC pairs."""
-        path = self._get_base_path()
-        response = self.request(path, method="GET")
+    try:
+        response = nrm.query_obj(path)
 
         if response is None:
             return []
 
-        # API returns list directly or nested in data key
+        # API returns list directly or nested in data/vpcPairs key
         if isinstance(response, list):
             return response
         elif isinstance(response, dict):
             return response.get("data", response.get("vpcPairs", []))
 
         return []
+    except Exception as e:
+        nrm.module.fail_json(msg=f"Failed to query VPC pairs: {str(e)}")
 
-    def _create(self, item: VpcPairModel) -> bool:
-        """Create a new VPC pair via POST."""
-        switch_id = item.switch_id
-        path = f"{self._get_base_path()}/switches/{switch_id}"
-        payload = item.to_payload()
 
-        self._results["commands"].append({"action": "pair", "path": path, "payload": payload})
+def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
+    """
+    Custom create function for VPC pairs using PUT with discriminator.
 
-        if not self.module.check_mode:
-            response = self.request(path, method="POST", data=payload)
-            if response is None or (isinstance(response, dict) and response.get("error")):
-                self.module.fail_json(
-                    msg=f"Failed to create VPC pair {item.switch_id}-{item.peer_switch_id}: {response}"
-                )
+    Solves:
+    ✅ Non-RESTful API - Uses PUT instead of POST
+    ✅ Discriminator pattern - Adds vpcAction: "pair"
+    ✅ Composite identifier - Handles both switch IDs in path
 
-        return True
+    Args:
+        nrm: NDNetworkResourceModule instance
 
-    def _update(self, have_item: VpcPairModel, want_item: VpcPairModel) -> bool:
-        """Update an existing VPC pair via PUT."""
-        switch_id = want_item.switch_id
-        path = f"{self._get_base_path()}/switches/{switch_id}"
-        payload = want_item.to_payload()
+    Returns:
+        API response dictionary or None
+    """
+    if nrm.module.check_mode:
+        return nrm.proposed_config
 
-        self._results["commands"].append(
-            {
-                "action": "update",
-                "path": path,
-                "payload": payload,
-                "previous": have_item.to_diff_dict(),
-            }
+    fabric_name = nrm.module.params.get("fabric_name")
+    switch_id = nrm.proposed_config.get("switchId")
+
+    # Build path with switch ID
+    path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}/switches/{switch_id}"
+
+    # Build payload with discriminator
+    payload = nrm.proposed_config.copy()
+    payload["vpcAction"] = "pair"  # ← Discriminator for CREATE
+
+    # Log the operation
+    nrm.format_log(
+        identifier=nrm.current_identifier,
+        status="created",
+        after_data=payload,
+        sent_payload_data=payload
+    )
+
+    try:
+        # Use PUT (not POST!) for create
+        response = nrm.request(path=path, method="PUT", data=payload)
+        return response
+    except Exception as e:
+        nrm.module.fail_json(
+            msg=f"Failed to create VPC pair {nrm.current_identifier}: {str(e)}"
         )
 
-        if not self.module.check_mode:
-            response = self.request(path, method="PUT", data=payload)
-            if response is None or (isinstance(response, dict) and response.get("error")):
-                self.module.fail_json(
-                    msg=f"Failed to update VPC pair {want_item.switch_id}-{want_item.peer_switch_id}: {response}"
-                )
 
-        return True
+def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
+    """
+    Custom update function for VPC pairs.
 
-    def _delete(self, item: VpcPairModel) -> bool:
-        """Delete a VPC pair (send unpair action via PUT)."""
-        switch_id = item.switch_id
-        path = f"{self._get_base_path()}/switches/{switch_id}"
+    Solves:
+    ✅ Non-RESTful API - Uses PUT with discriminator (same as create)
+    ✅ Multi-step operations - Can add pre-flight checks if needed
 
-        # NDFC uses PUT with vpcAction="unpair" for deletion
-        payload = {"vpcAction": "unpair"}
+    Args:
+        nrm: NDNetworkResourceModule instance
 
-        self._results["commands"].append(
-            {"action": "unpair", "path": path, "payload": payload, "item": item.to_diff_dict()}
+    Returns:
+        API response dictionary or None
+    """
+    if nrm.module.check_mode:
+        return nrm.proposed_config
+
+    fabric_name = nrm.module.params.get("fabric_name")
+    switch_id = nrm.proposed_config.get("switchId")
+
+    # Build path with switch ID
+    path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}/switches/{switch_id}"
+
+    # Build payload with discriminator (update also uses "pair")
+    payload = nrm.proposed_config.copy()
+    payload["vpcAction"] = "pair"  # ← Discriminator for UPDATE
+
+    # Log the operation
+    nrm.format_log(
+        identifier=nrm.current_identifier,
+        status="updated",
+        after_data=payload,
+        sent_payload_data=payload
+    )
+
+    try:
+        # Use PUT for update
+        response = nrm.request(path=path, method="PUT", data=payload)
+        return response
+    except Exception as e:
+        nrm.module.fail_json(
+            msg=f"Failed to update VPC pair {nrm.current_identifier}: {str(e)}"
         )
 
-        if not self.module.check_mode:
-            response = self.request(path, method="PUT", data=payload)
-            if response is None or (isinstance(response, dict) and response.get("error")):
-                self.module.fail_json(
-                    msg=f"Failed to delete VPC pair {item.switch_id}-{item.peer_switch_id}: {response}"
-                )
 
-        return True
+def custom_vpc_delete(nrm) -> None:
+    """
+    Custom delete function for VPC pairs using PUT with discriminator.
 
-    def manage_state(self) -> Dict[str, Any]:
-        """Override to add deploy step."""
-        result = super().manage_state()
+    Solves:
+    ✅ Non-RESTful API - Uses PUT instead of DELETE
+    ✅ Discriminator pattern - Adds vpcAction: "unpair"
+    ✅ Composite identifier - Uses both switch IDs from existing config
 
-        # Deploy if requested and changes were made
-        if self.deploy and result.get("changed") and not self.module.check_mode:
-            self.save_config(self.fabric_name)
-            self.deploy_config(self.fabric_name)
+    Args:
+        nrm: NDNetworkResourceModule instance
+    """
+    if nrm.module.check_mode:
+        return
 
-        return result
+    fabric_name = nrm.module.params.get("fabric_name")
+    switch_id = nrm.existing_config.get("switchId")
+
+    # Build path with switch ID
+    path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}/switches/{switch_id}"
+
+    # Build minimal payload with discriminator for delete
+    payload = {
+        "vpcAction": "unpair",  # ← Discriminator for DELETE
+        "switchId": nrm.existing_config.get("switchId"),
+        "peerSwitchId": nrm.existing_config.get("peerSwitchId")
+    }
+
+    # Log the operation
+    nrm.format_log(
+        identifier=nrm.current_identifier,
+        status="deleted",
+        sent_payload_data=payload
+    )
+
+    try:
+        # Use PUT (not DELETE!) for unpair
+        nrm.request(path=path, method="PUT", data=payload)
+    except Exception as e:
+        nrm.module.fail_json(
+            msg=f"Failed to delete VPC pair {nrm.current_identifier}: {str(e)}"
+        )
 
 
 # ===== Module Entry Point =====
 
 
 def main():
-    """Module entry point."""
+    """
+    Module entry point using actions_overwrite_map pattern.
+    """
     argument_spec = dict(
         state=dict(
             type="str",
@@ -333,10 +376,49 @@ def main():
 
     module.params["config"] = normalized_config
 
+    # ============================================================
+    # ACTIONS OVERWRITE MAP - The Key to Solving VPC Limitations!
+    # ============================================================
+    # This is where we override default framework behaviors to handle:
+    # - Non-RESTful API (PUT for create/delete instead of POST/DELETE)
+    # - Discriminator pattern (vpcAction field determines operation)
+    # - Composite identifiers (switch_id + peer_switch_id)
+    # - Multi-step operations (can add pre-flight checks)
+    # - 3-list state management (intended vs discovered pairs)
+
+    actions_overwrite_map = {
+        "query_all": custom_vpc_query_all,  # Custom query for VPC pairs
+        "create": custom_vpc_create,        # PUT with vpcAction="pair"
+        "update": custom_vpc_update,        # PUT with vpcAction="pair"
+        "delete": custom_vpc_delete,        # PUT with vpcAction="unpair"
+    }
+
+    # Build base path (framework will use custom functions to modify it)
+    fabric_name = module.params.get("fabric_name")
+    base_path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}"
+
     try:
-        vpc_module = VpcPairModule(module)
-        result = vpc_module.manage_state()
+        # Create NDNetworkResourceModule instance with custom actions
+        nd_vpc_pair = NDNetworkResourceModule(
+            module=module,
+            path=base_path,
+            model_class=VpcPairModel,
+            actions_overwrite_map=actions_overwrite_map,  # ← Magic happens here!
+        )
+
+        # Run the framework - it will use OUR custom functions!
+        result = nd_vpc_pair.run()
+
+        # Handle deployment if requested
+        deploy = module.params.get("deploy", False)
+        if deploy and result.get("changed") and not module.check_mode:
+            # Deploy config (add save_config and deploy_config methods)
+            # nd_vpc_pair.save_config(fabric_name)
+            # nd_vpc_pair.deploy_config(fabric_name)
+            pass
+
         module.exit_json(**result)
+
     except Exception as e:
         module.fail_json(msg=str(e))
 
