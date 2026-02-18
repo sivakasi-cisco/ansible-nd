@@ -116,7 +116,8 @@ from ansible_collections.cisco.nd.plugins.module_utils.nd_network_resources impo
     NDNetworkResourceModule,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
-from pydantic import Field
+from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
+from pydantic import Field, field_validator, model_validator
 
 
 # ===== VPC Pair Model =====
@@ -134,11 +135,57 @@ class VpcPairModel(NDBaseModel):
     identifier_strategy = "composite"
 
     # Fields (Ansible names -> API aliases)
-    switch_id: str = Field(alias="switchId", description="Peer-1 switch serial number")
-    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer-2 switch serial number")
+    switch_id: str = Field(
+        alias="switchId",
+        description="Peer-1 switch serial number",
+        min_length=3,
+        max_length=64
+    )
+    peer_switch_id: str = Field(
+        alias="peerSwitchId",
+        description="Peer-2 switch serial number",
+        min_length=3,
+        max_length=64
+    )
     use_virtual_peer_link: bool = Field(
         default=True, alias="useVirtualPeerLink", description="Virtual peer link enabled"
     )
+
+    @field_validator("switch_id", "peer_switch_id")
+    @classmethod
+    def validate_switch_id_format(cls, v: str) -> str:
+        """
+        Validate switch ID is not empty or whitespace.
+
+        Args:
+            v: Switch ID value
+
+        Returns:
+            Stripped switch ID
+
+        Raises:
+            ValueError: If switch ID is empty or whitespace
+        """
+        if not v or not v.strip():
+            raise ValueError("Switch ID cannot be empty or whitespace")
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_different_switches(self) -> "VpcPairModel":
+        """
+        Ensure switch_id and peer_switch_id are different.
+
+        Returns:
+            Validated model instance
+
+        Raises:
+            ValueError: If switch_id equals peer_switch_id
+        """
+        if self.switch_id == self.peer_switch_id:
+            raise ValueError(
+                f"switch_id and peer_switch_id must be different: {self.switch_id}"
+            )
+        return self
 
     def to_payload(self) -> Dict[str, Any]:
         """
@@ -178,8 +225,16 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
 
     Returns:
         List of VPC pair dictionaries from API
+
+    Raises:
+        ValueError: If fabric_name is not configured
     """
     fabric_name = nrm.module.params.get("fabric_name")
+
+    # Path validation
+    if not fabric_name:
+        raise ValueError("fabric_name is required but was not provided")
+
     path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}"
 
     try:
@@ -195,8 +250,15 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
             return response.get("data", response.get("vpcPairs", []))
 
         return []
+    except ValueError:
+        # Re-raise validation errors
+        raise
     except Exception as e:
-        nrm.module.fail_json(msg=f"Failed to query VPC pairs: {str(e)}")
+        nrm.module.fail_json(
+            msg=f"Failed to query VPC pairs: {str(e)}",
+            fabric=fabric_name,
+            path=path
+        )
 
 
 def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
@@ -213,12 +275,21 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
 
     Returns:
         API response dictionary or None
+
+    Raises:
+        ValueError: If fabric_name or switch_id is not provided
     """
     if nrm.module.check_mode:
         return nrm.proposed_config
 
     fabric_name = nrm.module.params.get("fabric_name")
     switch_id = nrm.proposed_config.get("switchId")
+
+    # Path validation
+    if not fabric_name:
+        raise ValueError("fabric_name is required but was not provided")
+    if not switch_id:
+        raise ValueError("switch_id is required but was not provided")
 
     # Build path with switch ID
     path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}/switches/{switch_id}"
@@ -236,12 +307,19 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
     )
 
     try:
-        # Use PUT (not POST!) for create
-        response = nrm.request(path=path, method="PUT", data=payload)
+        # Use PUT (not POST!) for create - Type-safe with HttpVerbEnum
+        response = nrm.request(path=path, method=HttpVerbEnum.PUT, data=payload)
         return response
+    except ValueError:
+        # Re-raise validation errors
+        raise
     except Exception as e:
         nrm.module.fail_json(
-            msg=f"Failed to create VPC pair {nrm.current_identifier}: {str(e)}"
+            msg=f"Failed to create VPC pair {nrm.current_identifier}: {str(e)}",
+            fabric=fabric_name,
+            switch_id=switch_id,
+            path=path,
+            exception_type=type(e).__name__
         )
 
 
@@ -258,12 +336,21 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
 
     Returns:
         API response dictionary or None
+
+    Raises:
+        ValueError: If fabric_name or switch_id is not provided
     """
     if nrm.module.check_mode:
         return nrm.proposed_config
 
     fabric_name = nrm.module.params.get("fabric_name")
     switch_id = nrm.proposed_config.get("switchId")
+
+    # Path validation
+    if not fabric_name:
+        raise ValueError("fabric_name is required but was not provided")
+    if not switch_id:
+        raise ValueError("switch_id is required but was not provided")
 
     # Build path with switch ID
     path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}/switches/{switch_id}"
@@ -281,12 +368,19 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
     )
 
     try:
-        # Use PUT for update
-        response = nrm.request(path=path, method="PUT", data=payload)
+        # Use PUT for update - Type-safe with HttpVerbEnum
+        response = nrm.request(path=path, method=HttpVerbEnum.PUT, data=payload)
         return response
+    except ValueError:
+        # Re-raise validation errors
+        raise
     except Exception as e:
         nrm.module.fail_json(
-            msg=f"Failed to update VPC pair {nrm.current_identifier}: {str(e)}"
+            msg=f"Failed to update VPC pair {nrm.current_identifier}: {str(e)}",
+            fabric=fabric_name,
+            switch_id=switch_id,
+            path=path,
+            exception_type=type(e).__name__
         )
 
 
@@ -301,12 +395,21 @@ def custom_vpc_delete(nrm) -> None:
 
     Args:
         nrm: NDNetworkResourceModule instance
+
+    Raises:
+        ValueError: If fabric_name or switch_id is not provided
     """
     if nrm.module.check_mode:
         return
 
     fabric_name = nrm.module.params.get("fabric_name")
     switch_id = nrm.existing_config.get("switchId")
+
+    # Path validation
+    if not fabric_name:
+        raise ValueError("fabric_name is required but was not provided")
+    if not switch_id:
+        raise ValueError("switch_id is required but was not provided")
 
     # Build path with switch ID
     path = f"/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/{fabric_name}/switches/{switch_id}"
@@ -326,11 +429,18 @@ def custom_vpc_delete(nrm) -> None:
     )
 
     try:
-        # Use PUT (not DELETE!) for unpair
-        nrm.request(path=path, method="PUT", data=payload)
+        # Use PUT (not DELETE!) for unpair - Type-safe with HttpVerbEnum
+        nrm.request(path=path, method=HttpVerbEnum.PUT, data=payload)
+    except ValueError:
+        # Re-raise validation errors
+        raise
     except Exception as e:
         nrm.module.fail_json(
-            msg=f"Failed to delete VPC pair {nrm.current_identifier}: {str(e)}"
+            msg=f"Failed to delete VPC pair {nrm.current_identifier}: {str(e)}",
+            fabric=fabric_name,
+            switch_id=switch_id,
+            path=path,
+            exception_type=type(e).__name__
         )
 
 
