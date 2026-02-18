@@ -21,7 +21,7 @@ organized into functional domains:
 """
 
 from abc import ABC, abstractmethod
-from pydantic import BaseModel, ConfigDict, Field, BeforeValidator
+from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, field_validator, model_validator
 from typing import List, Dict, Any, Optional, Union, Tuple, ClassVar, Literal, Annotated
 from typing_extensions import Self
 from enum import Enum
@@ -384,13 +384,59 @@ class VpcPairBase(NDVpcPairBaseModel):
     identifiers: ClassVar[List[str]] = ["switch_id", "peer_switch_id"]
     identifier_strategy: ClassVar[Literal["single", "composite", "hierarchical"]] = "composite"
 
-    # Fields
-    switch_id: str = Field(alias="switchId", description="Switch serial number (Peer-1)")
-    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer switch serial number (Peer-2)")
+    # Fields with validation constraints
+    switch_id: str = Field(
+        alias="switchId",
+        description="Switch serial number (Peer-1)",
+        min_length=3,
+        max_length=64
+    )
+    peer_switch_id: str = Field(
+        alias="peerSwitchId",
+        description="Peer switch serial number (Peer-2)",
+        min_length=3,
+        max_length=64
+    )
     use_virtual_peer_link: FlexibleBool = Field(default=False, alias="useVirtualPeerLink", description="Virtual peer link present")
     vpc_pair_details: Optional[Union[VpcPairDetailsDefault, VpcPairDetailsCustom]] = Field(
         default=None, discriminator="type", alias="vpcPairDetails", description="VPC pair configuration details"
     )
+
+    @field_validator("switch_id", "peer_switch_id")
+    @classmethod
+    def validate_switch_id_format(cls, v: str) -> str:
+        """
+        Validate switch ID is not empty or whitespace.
+
+        Args:
+            v: Switch ID value
+
+        Returns:
+            Stripped switch ID
+
+        Raises:
+            ValueError: If switch ID is empty or whitespace
+        """
+        if not v or not v.strip():
+            raise ValueError("Switch ID cannot be empty or whitespace")
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_different_switches(self) -> Self:
+        """
+        Ensure switch_id and peer_switch_id are different.
+
+        Returns:
+            Validated model instance
+
+        Raises:
+            ValueError: If switch_id equals peer_switch_id
+        """
+        if self.switch_id == self.peer_switch_id:
+            raise ValueError(
+                f"switch_id and peer_switch_id must be different: {self.switch_id}"
+            )
+        return self
 
     def to_payload(self) -> Dict[str, Any]:
         """Convert to API payload format."""
@@ -414,14 +460,60 @@ class VpcPairingRequest(NDVpcPairBaseModel):
     identifiers: ClassVar[List[str]] = ["switch_id", "peer_switch_id"]
     identifier_strategy: ClassVar[Literal["single", "composite", "hierarchical"]] = "composite"
 
-    # Fields
+    # Fields with validation constraints
     vpc_action: VpcAction = Field(default=VpcAction.PAIR, alias="vpcAction", description="Action to pair")
-    switch_id: str = Field(alias="switchId", description="Switch serial number (Peer-1)")
-    peer_switch_id: str = Field(alias="peerSwitchId", description="Peer switch serial number (Peer-2)")
+    switch_id: str = Field(
+        alias="switchId",
+        description="Switch serial number (Peer-1)",
+        min_length=3,
+        max_length=64
+    )
+    peer_switch_id: str = Field(
+        alias="peerSwitchId",
+        description="Peer switch serial number (Peer-2)",
+        min_length=3,
+        max_length=64
+    )
     use_virtual_peer_link: FlexibleBool = Field(default=False, alias="useVirtualPeerLink", description="Virtual peer link present")
     vpc_pair_details: Optional[Union[VpcPairDetailsDefault, VpcPairDetailsCustom]] = Field(
         default=None, discriminator="type", alias="vpcPairDetails", description="VPC pair configuration details"
     )
+
+    @field_validator("switch_id", "peer_switch_id")
+    @classmethod
+    def validate_switch_id_format(cls, v: str) -> str:
+        """
+        Validate switch ID is not empty or whitespace.
+
+        Args:
+            v: Switch ID value
+
+        Returns:
+            Stripped switch ID
+
+        Raises:
+            ValueError: If switch ID is empty or whitespace
+        """
+        if not v or not v.strip():
+            raise ValueError("Switch ID cannot be empty or whitespace")
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_different_switches(self) -> Self:
+        """
+        Ensure switch_id and peer_switch_id are different.
+
+        Returns:
+            Validated model instance
+
+        Raises:
+            ValueError: If switch_id equals peer_switch_id
+        """
+        if self.switch_id == self.peer_switch_id:
+            raise ValueError(
+                f"switch_id and peer_switch_id must be different: {self.switch_id}"
+            )
+        return self
 
     def to_payload(self) -> Dict[str, Any]:
         """Convert to API payload format."""

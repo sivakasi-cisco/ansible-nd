@@ -104,6 +104,10 @@ class VpcPairBasePath:
 
         - Complete fabrics path
 
+        ## Raises
+
+        - ValueError: If fabric_name is None, empty, or not a string
+
         ## Example
 
         ```python
@@ -111,6 +115,13 @@ class VpcPairBasePath:
         # Returns: /api/v1/manage/fabrics/Fabric1/switches
         ```
         """
+        # Validate fabric_name
+        if not fabric_name or not isinstance(fabric_name, str) or not fabric_name.strip():
+            raise ValueError(
+                f"VpcPairBasePath.fabrics(): fabric_name must be a non-empty string. "
+                f"Got: {fabric_name!r} (type: {type(fabric_name).__name__})"
+            )
+        
         if not segments:
             return cls.manage("fabrics", fabric_name)
         return cls.manage("fabrics", fabric_name, *segments)

@@ -178,7 +178,7 @@ class EpVpcPairSupportGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Comp
 
     - GET
 
-    ## Query Parameters
+    ## Gathered Parameters
 
     - componentType: Required. Values: "checkPairing", "checkFabricPeeringSupport"
 
@@ -234,7 +234,7 @@ class EpVpcPairOverviewGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Com
 
     - GET
 
-    ## Query Parameters
+    ## Gathered Parameters
 
     - componentType: Required. Values: "full", "health", "module", "vxlan",
       "overlay", "pairsInfo", "inventory", "anomalies"
@@ -291,7 +291,7 @@ class EpVpcPairRecommendationGet(FabricNameMixin, SwitchIdMixin, FromClusterMixi
 
     - GET
 
-    ## Query Parameters
+    ## Gathered Parameters
 
     - useVirtualPeerLink: Optional boolean
 
@@ -401,7 +401,7 @@ class EpVpcPairsListGet(FabricNameMixin, FromClusterMixin, FilterMixin, Paginati
 
     - GET
 
-    ## Query Parameters
+    ## Gathered Parameters
 
     - filter: Optional filter expression
     - max: Optional maximum number of results
