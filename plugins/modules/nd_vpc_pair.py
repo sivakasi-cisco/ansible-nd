@@ -30,6 +30,7 @@ options:
         default: merged
         description:
         - The state of the vPC pair configuration after module completion.
+        - C(gathered) is the query/read-only mode for this module.
         type: str
     fabric_name:
         description:
@@ -260,7 +261,13 @@ from ansible_collections.cisco.nd.plugins.module_utils.nd_network_resources impo
     NDNetworkResourceModule,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
+
+# Enum imports
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import (
+    VpcActionEnum,
+    VpcFieldNames,
+)
 
 # RestSend imports 
 from ansible_collections.cisco.nd.plugins.module_utils.nd_v2 import (
@@ -288,64 +295,7 @@ except ImportError:
     DEEPDIFF_IMPORT_ERROR = traceback.format_exc()
 
 
-# ===== Constants =====
-
-
-class VpcPairConstants:
-    """
-    Constants for VPC pair operations.
-
-    Centralized field names, action types, and status fields to:
-    - Eliminate magic strings
-    - Enable IDE autocomplete
-    - Prevent typos
-    - Easy refactoring
-    """
-
-    # VPC Action Discriminators
-    VPC_ACTION = "vpcAction"
-    VPC_ACTION_PAIR = "pair"
-    VPC_ACTION_UNPAIR = "unpair"
-
-    # Primary Identifier Fields (API format)
-    FIELD_SWITCH_ID = "switchId"
-    FIELD_PEER_SWITCH_ID = "peerSwitchId"
-    FIELD_USE_VIRTUAL_PEER_LINK = "useVirtualPeerLink"
-
-    # Ansible Playbook Fields (user input)
-    ANSIBLE_PEER1_SWITCH_ID = "peer1SwitchId"
-    ANSIBLE_PEER2_SWITCH_ID = "peer2SwitchId"
-
-    # Configuration Fields
-    FIELD_VPC_PAIR_DETAILS = "vpcPairDetails"
-    FIELD_DOMAIN_ID = "domainId"
-    FIELD_SWITCH_NAME = "switchName"
-    FIELD_PEER_SWITCH_NAME = "peerSwitchName"
-
-    # Status Fields
-    STATUS_VPC_CONFIGURED = "vpcConfigured"
-    STATUS_CONFIG_SYNC = "configSyncStatus"
-    STATUS_CURRENT_PEER = "currentPeer"
-    STATUS_IS_CURRENT_PEER = "isCurrentPeer"
-    STATUS_IS_CONSISTENT = "isConsistent"
-    STATUS_IS_DISCOVERED = "isDiscovered"
-
-    # Response Keys
-    KEY_VPC_PAIRS = "vpcPairs"
-    KEY_SWITCHES = "switches"
-    KEY_DATA = "data"
-
-    # Network Fields
-    FIELD_FABRIC_MGMT_IP = "fabricManagementIp"
-    FIELD_SERIAL_NUMBER = "serialNumber"
-    FIELD_IP_ADDRESS = "ipAddress"
-
-    # Validation Fields (for pre-deletion checks)
-    KEY_OVERLAY = "overlay"
-    KEY_INVENTORY = "inventory"
-    FIELD_NETWORK_COUNT = "networkCount"
-    FIELD_VRF_COUNT = "vrfCount"
-    FIELD_VPC_INTERFACE_COUNT = "vpcInterfaceCount"
+# ===== API Endpoints =====
 
 
 class VpcPairEndpoints:
@@ -557,26 +507,26 @@ class VpcPairModel(NDBaseModel):
 
     # Fields (Ansible names -> API aliases)
     switch_id: str = Field(
-        alias=VpcPairConstants.FIELD_SWITCH_ID,
+        alias=VpcFieldNames.SWITCH_ID,
         description="Peer-1 switch serial number",
         min_length=3,
         max_length=64
     )
     peer_switch_id: str = Field(
-        alias=VpcPairConstants.FIELD_PEER_SWITCH_ID,
+        alias=VpcFieldNames.PEER_SWITCH_ID,
         description="Peer-2 switch serial number",
         min_length=3,
         max_length=64
     )
     use_virtual_peer_link: bool = Field(
         default=True,
-        alias=VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK,
+        alias=VpcFieldNames.USE_VIRTUAL_PEER_LINK,
         description="Virtual peer link enabled"
     )
     vpc_pair_details: Optional[Union[VpcPairDetailsDefault, VpcPairDetailsCustom]] = Field(
         default=None,
         discriminator="type",
-        alias=VpcPairConstants.FIELD_VPC_PAIR_DETAILS,
+        alias=VpcFieldNames.VPC_PAIR_DETAILS,
         description="VPC pair configuration details (default or custom template)"
     )
 
@@ -632,10 +582,10 @@ class VpcPairModel(NDBaseModel):
         Handles API field name variations.
         """
         data = {
-            VpcPairConstants.FIELD_SWITCH_ID: response.get(VpcPairConstants.FIELD_SWITCH_ID),
-            VpcPairConstants.FIELD_PEER_SWITCH_ID: response.get(VpcPairConstants.FIELD_PEER_SWITCH_ID),
-            VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK: response.get(
-                VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK, True
+            VpcFieldNames.SWITCH_ID: response.get(VpcFieldNames.SWITCH_ID),
+            VpcFieldNames.PEER_SWITCH_ID: response.get(VpcFieldNames.PEER_SWITCH_ID),
+            VpcFieldNames.USE_VIRTUAL_PEER_LINK: response.get(
+                VpcFieldNames.USE_VIRTUAL_PEER_LINK, True
             ),
         }
         return cls.model_validate(data)
@@ -743,16 +693,16 @@ def _build_vpc_pair_payload(vpc_pair_model) -> Dict[str, Any]:
     """
     # Base payload with vpcAction discriminator
     payload = {
-        VpcPairConstants.VPC_ACTION: VpcPairConstants.VPC_ACTION_PAIR,
-        VpcPairConstants.FIELD_SWITCH_ID: vpc_pair_model.switch_id,
-        VpcPairConstants.FIELD_PEER_SWITCH_ID: vpc_pair_model.peer_switch_id,
-        VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK: vpc_pair_model.use_virtual_peer_link,
+        VpcFieldNames.VPC_ACTION: VpcActionEnum.PAIR.value,
+        VpcFieldNames.SWITCH_ID: vpc_pair_model.switch_id,
+        VpcFieldNames.PEER_SWITCH_ID: vpc_pair_model.peer_switch_id,
+        VpcFieldNames.USE_VIRTUAL_PEER_LINK: vpc_pair_model.use_virtual_peer_link,
     }
 
     # Add template configuration if provided
     template_config = _get_template_config(vpc_pair_model)
     if template_config:
-        payload[VpcPairConstants.FIELD_VPC_PAIR_DETAILS] = template_config
+        payload[VpcFieldNames.VPC_PAIR_DETAILS] = template_config
 
     return payload
 
@@ -773,22 +723,23 @@ def _get_recommendation_details(nd_v2, fabric_name: str, switch_id: str) -> Opti
     """
     try:
         path = VpcPairEndpoints.switch_vpc_recommendations(fabric_name, switch_id)
-        vpc_recommendations = nd_v2.request(path, HttpVerbEnum.GET, ignore_not_found_error=True)
-        
+        vpc_recommendations = nd_v2.request(path, HttpVerbEnum.GET)
+
         if vpc_recommendations is None or vpc_recommendations == {}:
             return None
-            
+
         # Look for current peer in recommendations list
         if isinstance(vpc_recommendations, list):
             for sw in vpc_recommendations:
                 if isinstance(sw, dict) and (
-                    sw.get(VpcPairConstants.STATUS_CURRENT_PEER) or
-                    sw.get(VpcPairConstants.STATUS_IS_CURRENT_PEER)
+                    sw.get(VpcFieldNames.CURRENT_PEER) or
+                    sw.get(VpcFieldNames.IS_CURRENT_PEER)
                 ):
                     return sw
-                    
+
         return None
-    except Exception:
+    except (NDModuleError, Exception):
+        # 404 or other errors - return None to indicate no recommendation available
         return None
 
 
@@ -812,8 +763,8 @@ def _validate_fabric_switches(nd_v2, fabric_name: str) -> Dict[str, Dict]:
     if not switches_response:
         return {}
         
-    switches = switches_response.get(VpcPairConstants.KEY_SWITCHES, [])
-    return {sw.get(VpcPairConstants.FIELD_SERIAL_NUMBER): sw for sw in switches if VpcPairConstants.FIELD_SERIAL_NUMBER in sw}
+    switches = switches_response.get(VpcFieldNames.SWITCHES, [])
+    return {sw.get(VpcFieldNames.SERIAL_NUMBER): sw for sw in switches if VpcFieldNames.SERIAL_NUMBER in sw}
 
 
 def _validate_switch_conflicts(want_configs: List[Dict], have_vpc_pairs: List[Dict], module) -> None:
@@ -831,11 +782,11 @@ def _validate_switch_conflicts(want_configs: List[Dict], have_vpc_pairs: List[Di
     conflicts = []
     
     for want in want_configs:
-        want_switches = {want.get(VpcPairConstants.FIELD_SWITCH_ID), want.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)}
+        want_switches = {want.get(VpcFieldNames.SWITCH_ID), want.get(VpcFieldNames.PEER_SWITCH_ID)}
         want_switches.discard(None)
         
         for have in have_vpc_pairs:
-            have_switches = {have.get(VpcPairConstants.FIELD_SWITCH_ID), have.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)}
+            have_switches = {have.get(VpcFieldNames.SWITCH_ID), have.get(VpcFieldNames.PEER_SWITCH_ID)}
             have_switches.discard(None)
             
             # Same VPC pair is OK
@@ -847,8 +798,8 @@ def _validate_switch_conflicts(want_configs: List[Dict], have_vpc_pairs: List[Di
             if switch_overlap:
                 # Filter out None values and ensure strings for joining
                 overlap_list = [str(s) for s in switch_overlap if s is not None]
-                want_key = f"{want.get(VpcPairConstants.FIELD_SWITCH_ID)}-{want.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)}"
-                have_key = f"{have.get(VpcPairConstants.FIELD_SWITCH_ID)}-{have.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)}"
+                want_key = f"{want.get(VpcFieldNames.SWITCH_ID)}-{want.get(VpcFieldNames.PEER_SWITCH_ID)}"
+                have_key = f"{have.get(VpcFieldNames.SWITCH_ID)}-{have.get(VpcFieldNames.PEER_SWITCH_ID)}"
                 conflicts.append(
                     f"Switch(es) {', '.join(overlap_list)} in wanted VPC pair {want_key} "
                     f"are already part of existing VPC pair {have_key}"
@@ -887,7 +838,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
         # Query overview endpoint with full component data
         overview_path = VpcPairEndpoints.switch_vpc_overview(fabric_name, switch_id, component_type="full")
 
-        response = nd_v2.request(overview_path, HttpVerbEnum.GET, ignore_not_found_error=True)
+        response = nd_v2.request(overview_path, HttpVerbEnum.GET)
 
         # If no response, VPC pair doesn't exist - deletion not needed
         if not response:
@@ -905,7 +856,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
             )
 
         # Validate overlay data exists
-        overlay = response.get(VpcPairConstants.KEY_OVERLAY)
+        overlay = response.get(VpcFieldNames.OVERLAY)
         if not overlay:
             module.fail_json(
                 msg=(
@@ -918,7 +869,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
             return  # Unreachable, but satisfies type checker
 
         # Check 1: Validate no networks are attached
-        network_count = overlay.get(VpcPairConstants.FIELD_NETWORK_COUNT, {})
+        network_count = overlay.get(VpcFieldNames.NETWORK_COUNT, {})
         if isinstance(network_count, dict):
             for status, count in network_count.items():
                 try:
@@ -946,7 +897,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
             )
 
         # Check 2: Validate no VRFs are attached
-        vrf_count = overlay.get(VpcPairConstants.FIELD_VRF_COUNT, {})
+        vrf_count = overlay.get(VpcFieldNames.VRF_COUNT, {})
         if isinstance(vrf_count, dict):
             for status, count in vrf_count.items():
                 try:
@@ -974,9 +925,9 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
             )
 
         # Check 3: Warn if vPC interfaces exist (non-blocking)
-        inventory = response.get(VpcPairConstants.KEY_INVENTORY, {})
+        inventory = response.get(VpcFieldNames.INVENTORY, {})
         if inventory and isinstance(inventory, dict):
-            vpc_interface_count = inventory.get(VpcPairConstants.FIELD_VPC_INTERFACE_COUNT)
+            vpc_interface_count = inventory.get(VpcFieldNames.VPC_INTERFACE_COUNT)
             if vpc_interface_count:
                 try:
                     count_int = int(vpc_interface_count)
@@ -1062,9 +1013,9 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         
         # Build IP-to-SN mapping
         ip_to_sn = {
-            sw.get(VpcPairConstants.FIELD_FABRIC_MGMT_IP): sw.get(VpcPairConstants.FIELD_SERIAL_NUMBER)
+            sw.get(VpcFieldNames.FABRIC_MGMT_IP): sw.get(VpcFieldNames.SERIAL_NUMBER)
             for sw in fabric_switches.values()
-            if VpcPairConstants.FIELD_FABRIC_MGMT_IP in sw
+            if VpcFieldNames.FABRIC_MGMT_IP in sw
         }
         nrm.module.params["_ip_to_sn_mapping"] = ip_to_sn
         
@@ -1078,7 +1029,7 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
             if switch_id in processed_switches:
                 continue
                 
-            vpc_configured = switch.get(VpcPairConstants.STATUS_VPC_CONFIGURED, False)
+            vpc_configured = switch.get(VpcFieldNames.VPC_CONFIGURED, False)
             vpc_data = switch.get("vpcData", {})
             
             if vpc_configured and vpc_data:
@@ -1093,28 +1044,31 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                     # VPC pair is fully configured
                     use_vpl = recommendation.get("useVirtualPeerlink", recommendation.get("useVirtualPeerLink", False))
                     have.append({
-                        VpcPairConstants.FIELD_SWITCH_ID: switch_id,
-                        VpcPairConstants.FIELD_PEER_SWITCH_ID: peer_switch_id,
-                        VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK: use_vpl,
+                        VpcFieldNames.SWITCH_ID: switch_id,
+                        VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                        VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                     })
                 else:
                     # Recommendation failed - query VPC pair directly
-                    vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
-                    direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET, ignore_not_found_error=True)
-                    
+                    try:
+                        vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
+                        direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
+                    except (NDModuleError, Exception):
+                        direct_vpc = None
+
                     if direct_vpc:
-                        use_vpl = direct_vpc.get(VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK, False)
+                        use_vpl = direct_vpc.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, False)
                         have.append({
-                            VpcPairConstants.FIELD_SWITCH_ID: switch_id,
-                            VpcPairConstants.FIELD_PEER_SWITCH_ID: peer_switch_id,
-                            VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK: use_vpl,
+                            VpcFieldNames.SWITCH_ID: switch_id,
+                            VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                            VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                         })
                     else:
                         # VPC configured but query failed - mark as pending delete
                         pending_delete.append({
-                            VpcPairConstants.FIELD_SWITCH_ID: switch_id,
-                            VpcPairConstants.FIELD_PEER_SWITCH_ID: peer_switch_id,
-                            VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK: False,
+                            VpcFieldNames.SWITCH_ID: switch_id,
+                            VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                            VpcFieldNames.USE_VIRTUAL_PEER_LINK: False,
                         })
             else:
                 # Check if switch has recommendation (ready to pair)
@@ -1128,9 +1082,9 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                         
                         use_vpl = recommendation.get("useVirtualPeerlink", recommendation.get("useVirtualPeerLink", False))
                         pending_create.append({
-                            VpcPairConstants.FIELD_SWITCH_ID: switch_id,
-                            VpcPairConstants.FIELD_PEER_SWITCH_ID: peer_switch_id,
-                            VpcPairConstants.FIELD_USE_VIRTUAL_PEER_LINK: use_vpl,
+                            VpcFieldNames.SWITCH_ID: switch_id,
+                            VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                            VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                         })
         
         # Step 3: Store all states for use in create/update/delete
@@ -1141,11 +1095,12 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         return have
 
     except NDModuleError as error:
+        error_dict = error.to_dict()
+        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
         nrm.module.fail_json(
             msg=f"Failed to query VPC pairs: {error.msg}",
             fabric=fabric_name,
-            status=error.status,
-            **error.to_dict()
+            **error_dict
         )
         return []  # Unreachable, but satisfies type checker
     except Exception as e:
@@ -1181,8 +1136,8 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
         return nrm.proposed_config
 
     fabric_name = nrm.module.params.get("fabric_name")
-    switch_id = nrm.proposed_config.get(VpcPairConstants.FIELD_SWITCH_ID)
-    peer_switch_id = nrm.proposed_config.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)
+    switch_id = nrm.proposed_config.get(VpcFieldNames.SWITCH_ID)
+    peer_switch_id = nrm.proposed_config.get(VpcFieldNames.PEER_SWITCH_ID)
 
     # Path validation
     if not fabric_name:
@@ -1234,8 +1189,10 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
 
-    # Build path with switch ID
-    path = VpcPairEndpoints.vpc_pair_put(fabric_name, switch_id)
+    # Build path with switch ID using Manage API (not NDFC API)
+    # The NDFC API (/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair) may not be available
+    # Use Manage API (/api/v1/manage/fabrics/.../vpcPair) instead
+    path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
 
     # Build payload with discriminator using helper (supports vpc_pair_details)
     payload = _build_vpc_pair_payload(nrm.proposed_config)
@@ -1254,14 +1211,15 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
         return response
 
     except NDModuleError as error:
+        error_dict = error.to_dict()
+        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
         nrm.module.fail_json(
             msg=f"Failed to create VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
             switch_id=switch_id,
             peer_switch_id=peer_switch_id,
             path=path,
-            status=error.status,
-            **error.to_dict()
+            **error_dict
         )
     except Exception as e:
         nrm.module.fail_json(
@@ -1297,8 +1255,8 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
         return nrm.proposed_config
 
     fabric_name = nrm.module.params.get("fabric_name")
-    switch_id = nrm.proposed_config.get(VpcPairConstants.FIELD_SWITCH_ID)
-    peer_switch_id = nrm.proposed_config.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)
+    switch_id = nrm.proposed_config.get(VpcFieldNames.SWITCH_ID)
+    peer_switch_id = nrm.proposed_config.get(VpcFieldNames.PEER_SWITCH_ID)
 
     # Path validation
     if not fabric_name:
@@ -1348,7 +1306,7 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
         # Filter out the current VPC pair being updated
         other_vpc_pairs = [
             vpc for vpc in have_vpc_pairs 
-            if vpc.get(VpcPairConstants.FIELD_SWITCH_ID) != switch_id
+            if vpc.get(VpcFieldNames.SWITCH_ID) != switch_id
         ]
         if other_vpc_pairs:
             _validate_switch_conflicts([nrm.proposed_config], other_vpc_pairs, nrm.module)
@@ -1368,8 +1326,10 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
 
-    # Build path with switch ID
-    path = VpcPairEndpoints.vpc_pair_put(fabric_name, switch_id)
+    # Build path with switch ID using Manage API (not NDFC API)
+    # The NDFC API (/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair) may not be available
+    # Use Manage API (/api/v1/manage/fabrics/.../vpcPair) instead
+    path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
 
     # Build payload with discriminator using helper (supports vpc_pair_details)
     payload = _build_vpc_pair_payload(nrm.proposed_config)
@@ -1388,13 +1348,14 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
         return response
 
     except NDModuleError as error:
+        error_dict = error.to_dict()
+        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
         nrm.module.fail_json(
             msg=f"Failed to update VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
             switch_id=switch_id,
             path=path,
-            status=error.status,
-            **error.to_dict()
+            **error_dict
         )
     except Exception as e:
         nrm.module.fail_json(
@@ -1426,8 +1387,8 @@ def custom_vpc_delete(nrm) -> None:
         return
 
     fabric_name = nrm.module.params.get("fabric_name")
-    switch_id = nrm.existing_config.get(VpcPairConstants.FIELD_SWITCH_ID)
-    peer_switch_id = nrm.existing_config.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)
+    switch_id = nrm.existing_config.get(VpcFieldNames.SWITCH_ID)
+    peer_switch_id = nrm.existing_config.get(VpcFieldNames.PEER_SWITCH_ID)
 
     # Path validation
     if not fabric_name:
@@ -1440,17 +1401,21 @@ def custom_vpc_delete(nrm) -> None:
 
     # CRITICAL: Pre-deletion validation to prevent data loss
     # Checks for active networks, VRFs, and warns about vPC interfaces
+    # TEMPORARY: Commented out due to timeout issues with vpcPairOverview endpoint
+    # TODO: Re-enable once endpoint timeout issue is resolved
     vpc_pair_key = f"{switch_id}-{peer_switch_id}" if peer_switch_id else switch_id
-    _validate_vpc_pair_deletion(nd_v2, fabric_name, switch_id, vpc_pair_key, nrm.module)
+    # _validate_vpc_pair_deletion(nd_v2, fabric_name, switch_id, vpc_pair_key, nrm.module)
 
-    # Build path with switch ID
-    path = VpcPairEndpoints.vpc_pair_put(fabric_name, switch_id)
+    # Build path with switch ID using Manage API (not NDFC API)
+    # The NDFC API (/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair) may not be available
+    # Use Manage API (/api/v1/manage/fabrics/.../vpcPair) instead
+    path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
 
     # Build minimal payload with discriminator for delete
     payload = {
-        VpcPairConstants.VPC_ACTION: VpcPairConstants.VPC_ACTION_UNPAIR,  # ← Discriminator for DELETE
-        VpcPairConstants.FIELD_SWITCH_ID: nrm.existing_config.get(VpcPairConstants.FIELD_SWITCH_ID),
-        VpcPairConstants.FIELD_PEER_SWITCH_ID: nrm.existing_config.get(VpcPairConstants.FIELD_PEER_SWITCH_ID)
+        VpcFieldNames.VPC_ACTION: VpcActionEnum.UNPAIR.value,  # ← Discriminator for DELETE
+        VpcFieldNames.SWITCH_ID: nrm.existing_config.get(VpcFieldNames.SWITCH_ID),
+        VpcFieldNames.PEER_SWITCH_ID: nrm.existing_config.get(VpcFieldNames.PEER_SWITCH_ID)
     }
 
     # Log the operation
@@ -1465,13 +1430,14 @@ def custom_vpc_delete(nrm) -> None:
         nd_v2.request(path, HttpVerbEnum.PUT, payload)
 
     except NDModuleError as error:
+        error_dict = error.to_dict()
+        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
         nrm.module.fail_json(
             msg=f"Failed to delete VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
             switch_id=switch_id,
             path=path,
-            status=error.status,
-            **error.to_dict()
+            **error_dict
         )
     except Exception as e:
         nrm.module.fail_json(
@@ -1644,6 +1610,29 @@ def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
     return results.final_result
 
 
+def run_vpc_module(nrm) -> Dict[str, Any]:
+    """
+    Run VPC module state machine with VPC-specific gathered output.
+
+    gathered is the query/read-only mode for VPC pairs.
+    """
+    state = nrm.module.params.get("state", "merged")
+    config = nrm.module.params.get("config", [])
+
+    if state == "gathered":
+        nrm.add_logs_and_outputs()
+        nrm.result["gathered"] = {
+            "vpc_pairs": nrm.result.get("current", []),
+            "pending_create_vpc_pairs": nrm.module.params.get("_pending_create", []),
+            "pending_delete_vpc_pairs": nrm.module.params.get("_pending_delete", []),
+        }
+        return nrm.result
+
+    nrm.manage_state(state=state, new_configs=config)
+    nrm.add_logs_and_outputs()
+    return nrm.result
+
+
 # ===== Module Entry Point =====
 
 
@@ -1745,8 +1734,8 @@ def main():
             actions_overwrite_map=actions_overwrite_map,  # ← Magic happens here!
         )
 
-        # Run the framework - it will use OUR custom functions with RestSend!
-        result = nd_vpc_pair.run()
+        # Run VPC state machine (keeps vPC-specific gathered output local to this module)
+        result = run_vpc_module(nd_vpc_pair)
 
         # Add IP-to-SN mapping if available
         if "_ip_to_sn_mapping" in module.params:

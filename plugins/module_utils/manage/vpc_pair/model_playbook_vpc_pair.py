@@ -24,7 +24,21 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, field_validator, model_validator
 from typing import List, Dict, Any, Optional, Union, Tuple, ClassVar, Literal, Annotated
 from typing_extensions import Self
-from enum import Enum
+
+# Import enums from centralized location
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import (
+    VpcActionEnum,
+    VpcPairTypeEnum,
+    KeepAliveVrfEnum,
+    PoModeEnum,
+    PortChannelDuplexEnum,
+    VpcRoleEnum,
+    MaintenanceModeEnum,
+    ComponentTypeOverviewEnum,
+    ComponentTypeSupportEnum,
+    VpcPairViewEnum,
+    VpcFieldNames,
+)
 
 # ============================================================================
 # TYPE COERCION HELPERS
@@ -180,54 +194,6 @@ class NDVpcPairNestedModel(BaseModel):
 
 
 # ============================================================================
-# ENUMERATIONS
-# ============================================================================
-
-
-class VpcRole(str, Enum):
-    """VPC role enumeration."""
-
-    PRIMARY = "primary"
-    SECONDARY = "secondary"
-    OPERATIONAL_PRIMARY = "operationalPrimary"
-    OPERATIONAL_SECONDARY = "operationalSecondary"
-
-
-class TemplateType(str, Enum):
-    """Template type enumeration."""
-
-    DEFAULT = "default"
-    CUSTOM = "custom"
-
-
-class KeepAliveVrf(str, Enum):
-    """Keep-alive VRF options."""
-
-    DEFAULT = "default"
-    MANAGEMENT = "management"
-
-
-class VpcAction(str, Enum):
-    """VPC management actions."""
-
-    PAIR = "pair"
-    UNPAIR = "unPair"
-
-
-class ComponentType(str, Enum):
-    """Component type for overview queries."""
-
-    FULL = "full"
-    HEALTH = "health"
-    MODULE = "module"
-    VXLAN = "vxlan"
-    OVERLAY = "overlay"
-    PAIRS_INFO = "pairsInfo"
-    INVENTORY = "inventory"
-    ANOMALIES = "anomalies"
-
-
-# ============================================================================
 # NESTED MODELS (No Identifiers)
 # ============================================================================
 
@@ -325,7 +291,7 @@ class VpcPairDetailsDefault(NDVpcPairNestedModel):
     domain_id: Optional[FlexibleInt] = Field(default=None, alias="domainId", description="VPC domain ID")
     switch_keep_alive_local_ip: Optional[str] = Field(default=None, alias="switchKeepAliveLocalIp", description="Peer-1 keep-alive IP")
     peer_switch_keep_alive_local_ip: Optional[str] = Field(default=None, alias="peerSwitchKeepAliveLocalIp", description="Peer-2 keep-alive IP")
-    keep_alive_vrf: Optional[KeepAliveVrf] = Field(default=None, alias="keepAliveVrf", description="Keep-alive VRF")
+    keep_alive_vrf: Optional[KeepAliveVrfEnum] = Field(default=None, alias="keepAliveVrf", description="Keep-alive VRF")
     keep_alive_hold_timeout: Optional[FlexibleInt] = Field(default=3, alias="keepAliveHoldTimeout", description="Keep-alive hold timeout")
     enable_mirror_config: Optional[FlexibleBool] = Field(default=False, alias="enableMirrorConfig", description="Enable config mirroring")
     is_vpc_plus: Optional[FlexibleBool] = Field(default=False, alias="isVpcPlus", description="VPC+ topology")
@@ -461,7 +427,7 @@ class VpcPairingRequest(NDVpcPairBaseModel):
     identifier_strategy: ClassVar[Literal["single", "composite", "hierarchical"]] = "composite"
 
     # Fields with validation constraints
-    vpc_action: VpcAction = Field(default=VpcAction.PAIR, alias="vpcAction", description="Action to pair")
+    vpc_action: VpcActionEnum = Field(default=VpcActionEnum.PAIR, alias="vpcAction", description="Action to pair")
     switch_id: str = Field(
         alias="switchId",
         description="Switch serial number (Peer-1)",
@@ -537,7 +503,7 @@ class VpcUnpairingRequest(NDVpcPairBaseModel):
     identifiers: ClassVar[List[str]] = []
 
     # Fields
-    vpc_action: VpcAction = Field(default=VpcAction.UNPAIR, alias="vpcAction", description="Action to unpair")
+    vpc_action: VpcActionEnum = Field(default=VpcActionEnum.UNPAIR, alias="vpcAction", description="Action to unpair")
 
     def get_identifier_value(self) -> str:
         """Override - unpair doesn't have identifiers."""
@@ -782,8 +748,8 @@ class VpcPairDiscovered(VpcPairBaseSwitchDetails):
     """
 
     type: Literal["discoveredPairs"] = Field(default="discoveredPairs", alias="type", description="Type identifier")
-    switch_vpc_role: VpcRole = Field(alias="switchVpcRole", description="VPC role of the switch")
-    peer_switch_vpc_role: VpcRole = Field(alias="peerSwitchVpcRole", description="VPC role of the peer switch")
+    switch_vpc_role: VpcRoleEnum = Field(alias="switchVpcRole", description="VPC role of the switch")
+    peer_switch_vpc_role: VpcRoleEnum = Field(alias="peerSwitchVpcRole", description="VPC role of the peer switch")
     intended_peer_name: str = Field(alias="intendedPeerName", description="Name of the intended peer switch")
     description: str = Field(alias="description", description="Description of any discrepancies or issues")
 
@@ -818,56 +784,56 @@ class VpcPairsResponse(NDVpcPairNestedModel):
 class VpcPairsInfo(NDVpcPairNestedModel):
     """VPC pairs information wrapper."""
 
-    component_type: ComponentType = Field(default=ComponentType.PAIRS_INFO, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.PAIRS_INFO, alias="componentType", description="Type of the component")
     info: VpcPairsInfoBase = Field(alias="info", description="VPC pair info")
 
 
 class VpcPairHealth(NDVpcPairNestedModel):
     """VPC pair health wrapper."""
 
-    component_type: ComponentType = Field(default=ComponentType.HEALTH, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.HEALTH, alias="componentType", description="Type of the component")
     health: VpcPairHealthBase = Field(alias="health", description="Health details")
 
 
 class VpcPairsModule(NDVpcPairNestedModel):
     """VPC pairs module wrapper."""
 
-    component_type: ComponentType = Field(default=ComponentType.MODULE, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.MODULE, alias="componentType", description="Type of the component")
     module: VpcPairsModuleBase = Field(alias="module", description="Module details")
 
 
 class VpcPairAnomalies(NDVpcPairNestedModel):
     """VPC pair anomalies wrapper."""
 
-    component_type: ComponentType = Field(default=ComponentType.ANOMALIES, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.ANOMALIES, alias="componentType", description="Type of the component")
     anomalies: VpcPairAnomaliesBase = Field(alias="anomalies", description="Anomalies details")
 
 
 class VpcPairsVxlan(NDVpcPairNestedModel):
     """VPC pairs VXLAN wrapper."""
 
-    component_type: ComponentType = Field(default=ComponentType.VXLAN, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.VXLAN, alias="componentType", description="Type of the component")
     vxlan: VpcPairsVxlanBase = Field(alias="vxlan", description="VXLAN details")
 
 
 class VpcPairsOverlay(NDVpcPairNestedModel):
     """VPC overlay details wrapper."""
 
-    component_type: ComponentType = Field(default=ComponentType.OVERLAY, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.OVERLAY, alias="componentType", description="Type of the component")
     overlay: VpcPairsOverlayBase = Field(alias="overlay", description="Overlay details")
 
 
 class VpcPairsInventory(NDVpcPairNestedModel):
     """VPC pairs inventory details wrapper."""
 
-    component_type: ComponentType = Field(default=ComponentType.INVENTORY, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.INVENTORY, alias="componentType", description="Type of the component")
     inventory: VpcPairsInventoryBase = Field(alias="inventory", description="Inventory details")
 
 
 class FullOverview(NDVpcPairNestedModel):
     """Full VPC overview response."""
 
-    component_type: ComponentType = Field(default=ComponentType.FULL, alias="componentType", description="Type of the component")
+    component_type: ComponentTypeOverviewEnum = Field(default=ComponentTypeOverviewEnum.FULL, alias="componentType", description="Type of the component")
     anomalies: VpcPairAnomaliesBase = Field(alias="anomalies", description="VPC pair anomalies")
     health: VpcPairHealthBase = Field(alias="health", description="VPC pair health")
     module: VpcPairsModuleBase = Field(alias="module", description="VPC pair module")
@@ -897,12 +863,12 @@ class NdVpcPairSchema:
     VpcPairBaseModel = NDVpcPairBaseModel
     VpcPairNestedModel = NDVpcPairNestedModel
 
-    # Enumerations
-    VpcRole = VpcRole
-    TemplateType = TemplateType
-    KeepAliveVrf = KeepAliveVrf
-    VpcAction = VpcAction
-    ComponentType = ComponentType
+    # Enumerations (these are class variable type hints, not assignments)
+    # VpcRole = VpcRoleEnum  # Commented out - not needed
+    # TemplateType = VpcPairTypeEnum  # Commented out - not needed
+    # KeepAliveVrf = KeepAliveVrfEnum  # Commented out - not needed
+    # VpcAction = VpcActionEnum  # Commented out - not needed
+    # ComponentType = ComponentTypeOverviewEnum  # Commented out - not needed
 
     # Nested helper models
     SwitchInfo = SwitchInfo

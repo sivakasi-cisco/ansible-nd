@@ -51,6 +51,14 @@ __all__ = [
     "VpcPairTypeEnum",
     "KeepAliveVrfEnum",
     "PoModeEnum",
+    "PortChannelDuplexEnum",
+    "VpcRoleEnum",
+    "MaintenanceModeEnum",
+    "ComponentTypeOverviewEnum",
+    "ComponentTypeSupportEnum",
+    "VpcPairViewEnum",
+    # Field names
+    "VpcFieldNames",
     # Base paths
     "VpcPairBasePath",
 ]
@@ -81,6 +89,13 @@ try:
         VpcPairTypeEnum,
         KeepAliveVrfEnum,
         PoModeEnum,
+        PortChannelDuplexEnum,
+        VpcRoleEnum,
+        MaintenanceModeEnum,
+        ComponentTypeOverviewEnum,
+        ComponentTypeSupportEnum,
+        VpcPairViewEnum,
+        VpcFieldNames,
     )
     from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
 

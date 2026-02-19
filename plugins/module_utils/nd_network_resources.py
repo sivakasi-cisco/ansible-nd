@@ -12,15 +12,10 @@ from copy import deepcopy
 from typing import Optional, List, Dict, Any, Callable, Literal
 from pydantic import ValidationError
 
-# TODO: To be replaced with:
-# from ansible_collections.cisco.nd.plugins.module_utils.nd import NDModule
-# from ansible_collections.cisco.nd.plugins.module_utils.nd_config_collection import NDConfigCollection
-# from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
-# from ansible_collections.cisco.nd.plugins.module_utils.constants import ALLOWED_STATES_TO_APPEND_SENT_AND_PROPOSED
-from nd import NDModule
-from nd_config_collection import NDConfigCollection
-from models.base import NDBaseModel
-from constants import ALLOWED_STATES_TO_APPEND_SENT_AND_PROPOSED
+from ansible_collections.cisco.nd.plugins.module_utils.nd import NDModule
+from ansible_collections.cisco.nd.plugins.module_utils.nd_config_collection import NDConfigCollection
+from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
+from ansible_collections.cisco.nd.plugins.module_utils.constants import ALLOWED_STATES_TO_APPEND_SENT_AND_PROPOSED
 
 
 class NDNetworkResourceModule(NDModule):
