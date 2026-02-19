@@ -11,8 +11,7 @@ __metaclass__ = type
 from typing import TypeVar, Generic, Optional, List, Dict, Any, Union, Tuple, Literal, Callable
 from copy import deepcopy
 
-# TODO: To be replaced with: from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
-from models.base import NDBaseModel
+from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
 
 # Type aliases
 # NOTE: Maybe add more type aliases in the future if needed

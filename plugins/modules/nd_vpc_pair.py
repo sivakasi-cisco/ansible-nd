@@ -264,10 +264,18 @@ from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBase
 
 # Enum imports
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
     VpcActionEnum,
     VpcFieldNames,
 )
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_endpoints import (
+    EpVpcPairGet,
+    EpVpcPairPut,
+    EpVpcPairOverviewGet,
+    EpVpcPairRecommendationGet,
+    EpVpcPairsListGet,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
 
 # RestSend imports 
 from ansible_collections.cisco.nd.plugins.module_utils.nd_v2 import (
@@ -341,13 +349,14 @@ class VpcPairEndpoints:
             fabric_name: Fabric name
 
         Returns:
-            Base VPC pair path
+            Base VPC pairs list path
 
         Example:
             >>> VpcPairEndpoints.vpc_pair_base("myFabric")
-            '/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/myFabric'
+            '/api/v1/manage/fabrics/myFabric/vpcPairs'
         """
-        return VpcPairEndpoints.VPC_PAIR_BASE.format(fabric_name=fabric_name)
+        endpoint = EpVpcPairsListGet(fabric_name=fabric_name)
+        return endpoint.path
 
     @staticmethod
     def vpc_pair_put(fabric_name: str, switch_id: str) -> str:
@@ -363,12 +372,10 @@ class VpcPairEndpoints:
 
         Example:
             >>> VpcPairEndpoints.vpc_pair_put("myFabric", "FDO123")
-            '/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair/fabrics/myFabric/switches/FDO123'
+            '/api/v1/manage/fabrics/myFabric/switches/FDO123/vpcPair'
         """
-        return VpcPairEndpoints.VPC_PAIR_SWITCH.format(
-            fabric_name=fabric_name,
-            switch_id=switch_id
-        )
+        endpoint = EpVpcPairPut(fabric_name=fabric_name, switch_id=switch_id)
+        return endpoint.path
 
     @staticmethod
     def fabric_switches(fabric_name: str) -> str:
@@ -385,7 +392,7 @@ class VpcPairEndpoints:
             >>> VpcPairEndpoints.fabric_switches("myFabric")
             '/api/v1/manage/fabrics/myFabric/switches'
         """
-        return VpcPairEndpoints.FABRIC_SWITCHES.format(fabric_name=fabric_name)
+        return VpcPairBasePath.fabrics(fabric_name, "switches")
 
     @staticmethod
     def switch_vpc_pair(fabric_name: str, switch_id: str) -> str:
@@ -403,10 +410,8 @@ class VpcPairEndpoints:
             >>> VpcPairEndpoints.switch_vpc_pair("myFabric", "FDO123")
             '/api/v1/manage/fabrics/myFabric/switches/FDO123/vpcPair'
         """
-        return VpcPairEndpoints.SWITCH_VPC_PAIR.format(
-            fabric_name=fabric_name,
-            switch_id=switch_id
-        )
+        endpoint = EpVpcPairGet(fabric_name=fabric_name, switch_id=switch_id)
+        return endpoint.path
 
     @staticmethod
     def switch_vpc_recommendations(fabric_name: str, switch_id: str) -> str:
@@ -424,10 +429,8 @@ class VpcPairEndpoints:
             >>> VpcPairEndpoints.switch_vpc_recommendations("myFabric", "FDO123")
             '/api/v1/manage/fabrics/myFabric/switches/FDO123/vpcPairRecommendations'
         """
-        return VpcPairEndpoints.SWITCH_VPC_RECOMMENDATIONS.format(
-            fabric_name=fabric_name,
-            switch_id=switch_id
-        )
+        endpoint = EpVpcPairRecommendationGet(fabric_name=fabric_name, switch_id=switch_id)
+        return endpoint.path
 
     @staticmethod
     def switch_vpc_overview(fabric_name: str, switch_id: str, component_type: str = "full") -> str:
@@ -446,10 +449,8 @@ class VpcPairEndpoints:
             >>> VpcPairEndpoints.switch_vpc_overview("myFabric", "FDO123")
             '/api/v1/manage/fabrics/myFabric/switches/FDO123/vpcPairOverview?componentType=full'
         """
-        base_path = VpcPairEndpoints.SWITCH_VPC_OVERVIEW.format(
-            fabric_name=fabric_name,
-            switch_id=switch_id
-        )
+        endpoint = EpVpcPairOverviewGet(fabric_name=fabric_name, switch_id=switch_id)
+        base_path = endpoint.path
         return f"{base_path}?componentType={component_type}"
 
     @staticmethod
@@ -467,7 +468,7 @@ class VpcPairEndpoints:
             >>> VpcPairEndpoints.fabric_config_save("myFabric")
             '/api/v1/manage/fabrics/myFabric/actions/configSave'
         """
-        return VpcPairEndpoints.FABRIC_CONFIG_SAVE.format(fabric_name=fabric_name)
+        return VpcPairBasePath.fabrics(fabric_name, "actions", "configSave")
 
     @staticmethod
     def fabric_config_deploy(fabric_name: str, force_show_run: bool = True) -> str:
@@ -485,7 +486,7 @@ class VpcPairEndpoints:
             >>> VpcPairEndpoints.fabric_config_deploy("myFabric")
             '/api/v1/manage/fabrics/myFabric/actions/deploy?forceShowRun=true'
         """
-        base_path = VpcPairEndpoints.FABRIC_CONFIG_DEPLOY.format(fabric_name=fabric_name)
+        base_path = VpcPairBasePath.fabrics(fabric_name, "actions", "deploy")
         if force_show_run:
             return f"{base_path}?forceShowRun=true"
         return base_path
@@ -691,18 +692,29 @@ def _build_vpc_pair_payload(vpc_pair_model) -> Dict[str, Any]:
         #     "vpcPairDetails": {...}  # Optional
         # }
     """
+    # Handle both dict and model object inputs
+    if isinstance(vpc_pair_model, dict):
+        switch_id = vpc_pair_model.get(VpcFieldNames.SWITCH_ID)
+        peer_switch_id = vpc_pair_model.get(VpcFieldNames.PEER_SWITCH_ID)
+        use_virtual_peer_link = vpc_pair_model.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True)
+    else:
+        switch_id = vpc_pair_model.switch_id
+        peer_switch_id = vpc_pair_model.peer_switch_id
+        use_virtual_peer_link = vpc_pair_model.use_virtual_peer_link
+
     # Base payload with vpcAction discriminator
     payload = {
         VpcFieldNames.VPC_ACTION: VpcActionEnum.PAIR.value,
-        VpcFieldNames.SWITCH_ID: vpc_pair_model.switch_id,
-        VpcFieldNames.PEER_SWITCH_ID: vpc_pair_model.peer_switch_id,
-        VpcFieldNames.USE_VIRTUAL_PEER_LINK: vpc_pair_model.use_virtual_peer_link,
+        VpcFieldNames.SWITCH_ID: switch_id,
+        VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+        VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_virtual_peer_link,
     }
 
-    # Add template configuration if provided
-    template_config = _get_template_config(vpc_pair_model)
-    if template_config:
-        payload[VpcFieldNames.VPC_PAIR_DETAILS] = template_config
+    # Add template configuration if provided (only for model objects)
+    if not isinstance(vpc_pair_model, dict):
+        template_config = _get_template_config(vpc_pair_model)
+        if template_config:
+            payload[VpcFieldNames.VPC_PAIR_DETAILS] = template_config
 
     return payload
 

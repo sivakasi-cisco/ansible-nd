@@ -74,7 +74,7 @@ try:
         EpVpcPairConsistencyGet,
         EpVpcPairsListGet,
     )
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_schemas import (
+    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.model_playbook_vpc_pair import (
         VpcPairDetailsDefault,
         VpcPairDetailsCustom,
         VpcPairingRequest,
@@ -99,7 +99,9 @@ try:
     )
     from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
 
-except ImportError:
+except ImportError as e:
     # Pydantic not available - components will not be exposed
     # This allows the package to be imported without pydantic for basic functionality
+    import sys
+    print(f"Warning: Could not import VPC pair components: {e}", file=sys.stderr)
     pass
