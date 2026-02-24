@@ -49,6 +49,26 @@ options:
         - Maps to Ansible check_mode internally.
         type: bool
         default: false
+    force:
+        description:
+        - Force deletion without pre-deletion validation checks.
+        - 'WARNING: Bypasses safety checks for networks, VRFs, and vPC interfaces.'
+        - Use only when validation API timeouts or you are certain deletion is safe.
+        - Only applies to deleted state.
+        type: bool
+        default: false
+    api_timeout:
+        description:
+        - API request timeout in seconds for primary operations (create, update, delete).
+        - Increase for large fabrics or slow networks.
+        type: int
+        default: 30
+    query_timeout:
+        description:
+        - API request timeout in seconds for query and recommendation operations.
+        - Lower timeout for non-critical queries to avoid port exhaustion.
+        type: int
+        default: 10
     config:
         description:
         - List of vPC pair configuration dictionaries.
@@ -497,9 +517,21 @@ class VpcPairEndpoints:
 
 class VpcPairModel(NDBaseModel):
     """
-    Pydantic model for VPC pair configuration.
+    Pydantic model for VPC pair configuration specific to nd_vpc_pair module.
 
     Uses composite identifier: (switch_id, peer_switch_id)
+
+    Note: This model is separate from VpcPairBase in model_playbook_vpc_pair.py because:
+    1. Different base class: NDBaseModel (module-specific) vs NDVpcPairBaseModel (API-generic)
+    2. Different defaults: use_virtual_peer_link=True (module default) vs False (API default)
+    3. Different type coercion: bool (strict) vs FlexibleBool (flexible API input)
+    4. Module-specific validation and error messages tailored to Ansible user experience
+
+    These models serve different purposes:
+    - VpcPairModel: Ansible module input validation and framework integration
+    - VpcPairBase: Generic API schema for broader vpc_pair functionality
+
+    DO NOT consolidate without ensuring all tests pass and defaults match module documentation.
     """
 
     # Identifier configuration
@@ -719,92 +751,273 @@ def _build_vpc_pair_payload(vpc_pair_model) -> Dict[str, Any]:
     return payload
 
 
-def _get_recommendation_details(nd_v2, fabric_name: str, switch_id: str) -> Optional[Dict]:
+# API field compatibility mapping
+# ND API versions use inconsistent field names - this mapping provides a canonical interface
+API_FIELD_ALIASES = {
+    # Primary field name -> list of alternative field names to check
+    "useVirtualPeerLink": ["useVirtualPeerlink"],  # ND 4.2+ uses camelCase "Link", older versions use lowercase "link"
+    "serialNumber": ["serial_number", "serialNo"],  # Alternative serial number field names
+}
+
+
+def _get_api_field_value(api_response: Dict, field_name: str, default=None):
+    """
+    Get field value from API response handling inconsistent field naming across ND API versions.
+
+    Different ND API versions use inconsistent field names (useVirtualPeerLink vs useVirtualPeerlink).
+    This function checks the primary field name and all known aliases.
+
+    Args:
+        api_response: API response dictionary
+        field_name: Primary field name to retrieve
+        default: Default value if field not found
+
+    Returns:
+        Field value or default if not found
+
+    Example:
+        >>> recommendation = {"useVirtualPeerlink": True}  # Old API format
+        >>> _get_api_field_value(recommendation, "useVirtualPeerLink", False)
+        True  # Found via alias mapping
+
+        >>> recommendation = {"useVirtualPeerLink": True}  # New API format
+        >>> _get_api_field_value(recommendation, "useVirtualPeerLink", False)
+        True  # Found via primary field name
+    """
+    if not isinstance(api_response, dict):
+        return default
+
+    # Check primary field name first
+    if field_name in api_response:
+        return api_response[field_name]
+
+    # Check aliases
+    aliases = API_FIELD_ALIASES.get(field_name, [])
+    for alias in aliases:
+        if alias in api_response:
+            return api_response[alias]
+
+    return default
+
+
+def _get_recommendation_details(nd_v2, fabric_name: str, switch_id: str, timeout: Optional[int] = None) -> Optional[Dict]:
     """
     Get VPC pair recommendation details from ND for a specific switch.
-    
+
     Returns peer switch info and useVirtualPeerLink status.
-    
+
     Args:
         nd_v2: NDModuleV2 instance for RestSend
         fabric_name: Fabric name
         switch_id: Switch serial number
-        
+        timeout: Optional timeout override (uses module param if not specified)
+
     Returns:
-        Dict with peer info or None if not available
+        Dict with peer info or None if not found (404)
+
+    Raises:
+        NDModuleError: On API errors other than 404 (timeouts, 500s, etc.)
     """
+    # Validate inputs to prevent injection
+    if not fabric_name or not isinstance(fabric_name, str):
+        raise ValueError(f"Invalid fabric_name: {fabric_name}")
+    if not switch_id or not isinstance(switch_id, str) or len(switch_id) < 3:
+        raise ValueError(f"Invalid switch_id: {switch_id}")
+
     try:
         path = VpcPairEndpoints.switch_vpc_recommendations(fabric_name, switch_id)
-        vpc_recommendations = nd_v2.request(path, HttpVerbEnum.GET)
+
+        # Use query timeout from module params or override
+        if timeout is None:
+            timeout = nd_v2.module.params.get("query_timeout", 10)
+
+        rest_send = nd_v2._get_rest_send()
+        rest_send.save_settings()
+        rest_send.timeout = timeout
+        try:
+            vpc_recommendations = nd_v2.request(path, HttpVerbEnum.GET)
+        finally:
+            rest_send.restore_settings()
 
         if vpc_recommendations is None or vpc_recommendations == {}:
             return None
 
-        # Look for current peer in recommendations list
+        # Validate response structure and look for current peer
         if isinstance(vpc_recommendations, list):
             for sw in vpc_recommendations:
-                if isinstance(sw, dict) and (
-                    sw.get(VpcFieldNames.CURRENT_PEER) or
-                    sw.get(VpcFieldNames.IS_CURRENT_PEER)
-                ):
+                # Validate each entry
+                if not isinstance(sw, dict):
+                    nd_v2.module.warn(
+                        f"Skipping invalid recommendation entry for switch {switch_id}: "
+                        f"expected dict, got {type(sw).__name__}"
+                    )
+                    continue
+
+                # Check for current peer indicators
+                if sw.get(VpcFieldNames.CURRENT_PEER) or sw.get(VpcFieldNames.IS_CURRENT_PEER):
+                    # Validate required fields exist
+                    if VpcFieldNames.SERIAL_NUMBER not in sw:
+                        nd_v2.module.warn(
+                            f"Recommendation missing serialNumber field for switch {switch_id}"
+                        )
+                        continue
                     return sw
+        elif vpc_recommendations:
+            # Unexpected response format
+            nd_v2.module.warn(
+                f"Unexpected recommendation response format for switch {switch_id}: "
+                f"expected list, got {type(vpc_recommendations).__name__}"
+            )
 
         return None
-    except (NDModuleError, Exception):
-        # 404 or other errors - return None to indicate no recommendation available
-        return None
+
+    except NDModuleError as error:
+        # Handle expected error codes gracefully
+        if error.status == 404:
+            # No recommendations exist (expected for switches without VPC)
+            return None
+        elif error.status == 500:
+            # Server error - recommendation API may be unstable
+            # Treat as "no recommendations available" to allow graceful degradation
+            nd_v2.module.warn(
+                f"VPC recommendation API returned 500 error for switch {switch_id} - "
+                f"treating as no recommendations available"
+            )
+            return None
+        # Let other errors (timeouts, rate limits) propagate
+        raise
 
 
 def _validate_fabric_switches(nd_v2, fabric_name: str) -> Dict[str, Dict]:
     """
     Query and validate fabric switch inventory.
-    
+
     Args:
         nd_v2: NDModuleV2 instance for RestSend
         fabric_name: Fabric name
-        
+
     Returns:
         Dict mapping switch serial number to switch info
-        
+
     Raises:
+        ValueError: If inputs are invalid
         NDModuleError: If fabric switch query fails
     """
-    switches_path = VpcPairEndpoints.fabric_switches(fabric_name)
-    switches_response = nd_v2.request(switches_path, HttpVerbEnum.GET)
-    
+    # Input validation
+    if not fabric_name or not isinstance(fabric_name, str):
+        raise ValueError(f"Invalid fabric_name: {fabric_name}")
+
+    # Use api_timeout from module params
+    timeout = nd_v2.module.params.get("api_timeout", 30)
+
+    rest_send = nd_v2._get_rest_send()
+    rest_send.save_settings()
+    rest_send.timeout = timeout
+    try:
+        switches_path = VpcPairEndpoints.fabric_switches(fabric_name)
+        switches_response = nd_v2.request(switches_path, HttpVerbEnum.GET)
+    finally:
+        rest_send.restore_settings()
+
     if not switches_response:
         return {}
-        
+
+    # Validate response structure
+    if not isinstance(switches_response, dict):
+        nd_v2.module.warn(
+            f"Unexpected switches response format: expected dict, got {type(switches_response).__name__}"
+        )
+        return {}
+
     switches = switches_response.get(VpcFieldNames.SWITCHES, [])
-    return {sw.get(VpcFieldNames.SERIAL_NUMBER): sw for sw in switches if VpcFieldNames.SERIAL_NUMBER in sw}
+
+    # Validate switches is a list
+    if not isinstance(switches, list):
+        nd_v2.module.warn(
+            f"Unexpected switches format: expected list, got {type(switches).__name__}"
+        )
+        return {}
+
+    # Build validated switch dictionary
+    result = {}
+    for sw in switches:
+        if not isinstance(sw, dict):
+            nd_v2.module.warn(f"Skipping invalid switch entry: expected dict, got {type(sw).__name__}")
+            continue
+
+        serial_number = sw.get(VpcFieldNames.SERIAL_NUMBER)
+        if not serial_number:
+            continue
+
+        # Validate serial number format
+        if not isinstance(serial_number, str) or len(serial_number) < 3:
+            nd_v2.module.warn(f"Skipping switch with invalid serial number: {serial_number}")
+            continue
+
+        result[serial_number] = sw
+
+    return result
 
 
 def _validate_switch_conflicts(want_configs: List[Dict], have_vpc_pairs: List[Dict], module) -> None:
     """
     Validate that switches in want configs aren't already in different VPC pairs.
-    
+
+    Optimized implementation using index-based lookup for O(n) time complexity instead of O(n²).
+
     Args:
         want_configs: List of desired VPC pair configs
         have_vpc_pairs: List of existing VPC pairs
         module: AnsibleModule instance for fail_json
-        
+
     Raises:
         AnsibleModule.fail_json: If switch conflicts detected
     """
     conflicts = []
-    
+
+    # Build index of existing VPC pairs by switch ID - O(m) where m = len(have_vpc_pairs)
+    # Maps switch_id -> list of VPC pairs containing that switch
+    switch_to_vpc_index = {}
+    for have in have_vpc_pairs:
+        have_switch_id = have.get(VpcFieldNames.SWITCH_ID)
+        have_peer_id = have.get(VpcFieldNames.PEER_SWITCH_ID)
+
+        if have_switch_id:
+            if have_switch_id not in switch_to_vpc_index:
+                switch_to_vpc_index[have_switch_id] = []
+            switch_to_vpc_index[have_switch_id].append(have)
+
+        if have_peer_id:
+            if have_peer_id not in switch_to_vpc_index:
+                switch_to_vpc_index[have_peer_id] = []
+            switch_to_vpc_index[have_peer_id].append(have)
+
+    # Check each want config for conflicts - O(n) where n = len(want_configs)
     for want in want_configs:
         want_switches = {want.get(VpcFieldNames.SWITCH_ID), want.get(VpcFieldNames.PEER_SWITCH_ID)}
         want_switches.discard(None)
-        
-        for have in have_vpc_pairs:
+
+        # Build set of all VPC pairs that contain any switch from want_switches - O(1) lookup per switch
+        # Use set to track VPC IDs we've already checked to avoid duplicate processing
+        conflicting_vpcs = {}  # vpc_id -> vpc dict
+        for switch in want_switches:
+            if switch in switch_to_vpc_index:
+                for vpc in switch_to_vpc_index[switch]:
+                    # Use tuple of sorted switch IDs as unique identifier
+                    vpc_id = tuple(sorted([vpc.get(VpcFieldNames.SWITCH_ID), vpc.get(VpcFieldNames.PEER_SWITCH_ID)]))
+                    # Only add if we haven't seen this VPC ID before (avoids duplicate processing)
+                    if vpc_id not in conflicting_vpcs:
+                        conflicting_vpcs[vpc_id] = vpc
+
+        # Check each potentially conflicting VPC pair
+        for vpc_id, have in conflicting_vpcs.items():
             have_switches = {have.get(VpcFieldNames.SWITCH_ID), have.get(VpcFieldNames.PEER_SWITCH_ID)}
             have_switches.discard(None)
-            
+
             # Same VPC pair is OK
             if want_switches == have_switches:
                 continue
-                
+
             # Check for switch overlap with different pairs
             switch_overlap = want_switches & have_switches
             if switch_overlap:
@@ -816,7 +1029,7 @@ def _validate_switch_conflicts(want_configs: List[Dict], have_vpc_pairs: List[Di
                     f"Switch(es) {', '.join(overlap_list)} in wanted VPC pair {want_key} "
                     f"are already part of existing VPC pair {have_key}"
                 )
-    
+
     if conflicts:
         module.fail_json(
             msg="Switch conflicts detected. A switch can only be part of one VPC pair at a time.",
@@ -878,7 +1091,6 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
                 vpc_pair_key=vpc_pair_key,
                 response=response
             )
-            return  # Unreachable, but satisfies type checker
 
         # Check 1: Validate no networks are attached
         network_count = overlay.get(VpcFieldNames.NETWORK_COUNT, {})
@@ -1011,19 +1223,24 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
     try:
         # Step 1: Query and validate fabric switches (UpdateInventory.refresh())
         fabric_switches = _validate_fabric_switches(nd_v2, fabric_name)
-        
+
         if not fabric_switches:
             nrm.module.warn(f"No switches found in fabric {fabric_name}")
-            nrm.module.params["_fabric_switches"] = {}
+            nrm.module.params["_fabric_switches"] = []  # Use list for JSON serialization
+            nrm.module.params["_fabric_switches_count"] = 0
             nrm.module.params["_have"] = []
             nrm.module.params["_pending_create"] = []
             nrm.module.params["_pending_delete"] = []
             return []
-        
-        # Store for validation in create/update/delete actions
-        nrm.module.params["_fabric_switches"] = fabric_switches
-        
-        # Build IP-to-SN mapping
+
+        # Memory optimization: Convert to list immediately to avoid keeping full dict in memory
+        # Keep only switch IDs for validation (not full switch objects)
+        # Use list (not set) for JSON serialization compatibility
+        fabric_switches_list = list(fabric_switches.keys())
+        nrm.module.params["_fabric_switches"] = fabric_switches_list
+        nrm.module.params["_fabric_switches_count"] = len(fabric_switches)
+
+        # Build IP-to-SN mapping (extract before dict is discarded)
         ip_to_sn = {
             sw.get(VpcFieldNames.FABRIC_MGMT_IP): sw.get(VpcFieldNames.SERIAL_NUMBER)
             for sw in fabric_switches.values()
@@ -1036,25 +1253,39 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         pending_create = []
         pending_delete = []
         processed_switches = set()
-        
+
+        # Build set of switch IDs from user config to limit recommendation queries
+        config = nrm.module.params.get("config") or []
+        config_switch_ids = set()
+        for item in config:
+            # Note: config items have been normalized to snake_case (switch_id, peer_switch_id)
+            # not the original Ansible input names (peer1_switch_id, peer2_switch_id)
+            switch_id_val = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
+            peer_switch_id_val = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
+
+            if switch_id_val:
+                config_switch_ids.add(switch_id_val)
+            if peer_switch_id_val:
+                config_switch_ids.add(peer_switch_id_val)
+
         for switch_id, switch in fabric_switches.items():
             if switch_id in processed_switches:
                 continue
-                
+
             vpc_configured = switch.get(VpcFieldNames.VPC_CONFIGURED, False)
             vpc_data = switch.get("vpcData", {})
-            
+
             if vpc_configured and vpc_data:
                 peer_switch_id = vpc_data.get("peerSwitchId")
                 processed_switches.add(switch_id)
                 processed_switches.add(peer_switch_id)
-                
+
                 # Try recommendation API for useVirtualPeerLink status
                 recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
-                
+
                 if recommendation:
                     # VPC pair is fully configured
-                    use_vpl = recommendation.get("useVirtualPeerlink", recommendation.get("useVirtualPeerLink", False))
+                    use_vpl = _get_api_field_value(recommendation, "useVirtualPeerLink", False)
                     have.append({
                         VpcFieldNames.SWITCH_ID: switch_id,
                         VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
@@ -1064,7 +1295,13 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                     # Recommendation failed - query VPC pair directly
                     try:
                         vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
-                        direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
+                        rest_send = nd_v2._get_rest_send()
+                        rest_send.save_settings()
+                        rest_send.timeout = 5
+                        try:
+                            direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
+                        finally:
+                            rest_send.restore_settings()
                     except (NDModuleError, Exception):
                         direct_vpc = None
 
@@ -1082,46 +1319,89 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                             VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
                             VpcFieldNames.USE_VIRTUAL_PEER_LINK: False,
                         })
-            else:
-                # Check if switch has recommendation (ready to pair)
+            elif not config_switch_ids or switch_id in config_switch_ids:
+                # Check recommendations for:
+                # - All switches if no config provided (gathered state)
+                # - Only switches in user's config if config provided
                 recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
-                
+
                 if recommendation:
-                    peer_switch_id = recommendation.get("serialNumber")
+                    peer_switch_id = _get_api_field_value(recommendation, "serialNumber")
                     if peer_switch_id:
                         processed_switches.add(switch_id)
                         processed_switches.add(peer_switch_id)
-                        
-                        use_vpl = recommendation.get("useVirtualPeerlink", recommendation.get("useVirtualPeerLink", False))
+
+                        use_vpl = _get_api_field_value(recommendation, "useVirtualPeerLink", False)
                         pending_create.append({
                             VpcFieldNames.SWITCH_ID: switch_id,
                             VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
                             VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                         })
+                else:
+                    # Recommendation failed - try direct VPC query to detect staged (not deployed) pairs
+                    try:
+                        vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
+                        rest_send = nd_v2._get_rest_send()
+                        rest_send.save_settings()
+                        rest_send.timeout = 5
+                        try:
+                            direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
+                        finally:
+                            rest_send.restore_settings()
+                    except (NDModuleError, Exception):
+                        direct_vpc = None
+
+                    if direct_vpc:
+                        peer_switch_id = direct_vpc.get(VpcFieldNames.PEER_SWITCH_ID)
+                        if peer_switch_id:
+                            processed_switches.add(switch_id)
+                            processed_switches.add(peer_switch_id)
+
+                            use_vpl = direct_vpc.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, False)
+                            have.append({
+                                VpcFieldNames.SWITCH_ID: switch_id,
+                                VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                                VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
+                            })
         
         # Step 3: Store all states for use in create/update/delete
         nrm.module.params["_have"] = have
         nrm.module.params["_pending_create"] = pending_create
         nrm.module.params["_pending_delete"] = pending_delete
-        
-        return have
+
+        # Treat pending pairs as existing to make merged state idempotent
+        existing_pairs = []
+        seen_keys = set()
+        for pair in have + pending_create + pending_delete:
+            key = (
+                pair.get(VpcFieldNames.SWITCH_ID),
+                pair.get(VpcFieldNames.PEER_SWITCH_ID),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            existing_pairs.append(pair)
+
+        # Note: Memory optimization already applied at line 1219-1220
+        # fabric_switches dict was converted to set immediately after query
+        return existing_pairs
 
     except NDModuleError as error:
         error_dict = error.to_dict()
-        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
+        # Preserve original API error message with different key to avoid conflict
+        if 'msg' in error_dict:
+            error_dict['api_error_msg'] = error_dict.pop('msg')
         nrm.module.fail_json(
             msg=f"Failed to query VPC pairs: {error.msg}",
             fabric=fabric_name,
             **error_dict
         )
-        return []  # Unreachable, but satisfies type checker
     except Exception as e:
         nrm.module.fail_json(
             msg=f"Failed to query VPC pairs: {str(e)}",
             fabric=fabric_name,
             exception_type=type(e).__name__
         )
-        return []  # Unreachable, but satisfies type checker
 
 
 def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
@@ -1160,7 +1440,7 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
         raise ValueError("peer_switch_id is required but was not provided")
 
     # Validation Step 1: Check switches exist in fabric (from Common.validate_switches_exist)
-    fabric_switches = nrm.module.params.get("_fabric_switches", {})
+    fabric_switches = nrm.module.params.get("_fabric_switches", set())
     if fabric_switches:
         missing_switches = []
         if switch_id not in fabric_switches:
@@ -1169,7 +1449,9 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
             missing_switches.append(peer_switch_id)
 
         if missing_switches:
-            valid_switches = sorted(fabric_switches.keys())
+            # fabric_switches is now a set, so convert to sorted list
+            valid_switches = sorted(list(fabric_switches))
+            MAX_SWITCHES_IN_ERROR = 10
             error_msg = (
                 f"Switch validation failed: The following switch(es) do not exist in fabric '{fabric_name}':\n"
                 f"  Missing switches: {', '.join(missing_switches)}\n"
@@ -1181,10 +1463,10 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
             )
 
             # Include limited valid switches list for reference
-            if len(valid_switches) <= 10:
+            if len(valid_switches) <= MAX_SWITCHES_IN_ERROR:
                 error_msg += f"Valid switches in fabric: {', '.join(valid_switches)}"
             else:
-                error_msg += f"Valid switches in fabric (first 10): {', '.join(valid_switches[:10])} ... and {len(valid_switches) - 10} more"
+                error_msg += f"Valid switches in fabric (first {MAX_SWITCHES_IN_ERROR}): {', '.join(valid_switches[:MAX_SWITCHES_IN_ERROR])} ... and {len(valid_switches) - MAX_SWITCHES_IN_ERROR} more"
 
             nrm.module.fail_json(
                 msg=error_msg,
@@ -1197,6 +1479,18 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
     have_vpc_pairs = nrm.module.params.get("_have", [])
     if have_vpc_pairs:
         _validate_switch_conflicts([nrm.proposed_config], have_vpc_pairs, nrm.module)
+
+    # Validation Step 3: Check if create is actually needed (idempotence check)
+    if nrm.existing_config:
+        want_dict = nrm.proposed_config.model_dump(by_alias=True, exclude_none=True) if hasattr(nrm.proposed_config, 'model_dump') else nrm.proposed_config
+        have_dict = nrm.existing_config.model_dump(by_alias=True, exclude_none=True) if hasattr(nrm.existing_config, 'model_dump') else nrm.existing_config
+
+        if not _is_update_needed(want_dict, have_dict):
+            # Already exists in desired state - return existing config without changes
+            nrm.module.warn(
+                f"VPC pair {nrm.current_identifier} already exists in desired state - skipping create"
+            )
+            return nrm.existing_config
 
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
@@ -1224,7 +1518,9 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
 
     except NDModuleError as error:
         error_dict = error.to_dict()
-        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
+        # Preserve original API error message with different key to avoid conflict
+        if 'msg' in error_dict:
+            error_dict['api_error_msg'] = error_dict.pop('msg')
         nrm.module.fail_json(
             msg=f"Failed to create VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
@@ -1279,7 +1575,7 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
         raise ValueError("peer_switch_id is required but was not provided")
 
     # Validation Step 1: Check switches exist in fabric (from Common.validate_switches_exist)
-    fabric_switches = nrm.module.params.get("_fabric_switches", {})
+    fabric_switches = nrm.module.params.get("_fabric_switches", set())
     if fabric_switches:
         missing_switches = []
         if switch_id not in fabric_switches:
@@ -1288,7 +1584,9 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
             missing_switches.append(peer_switch_id)
 
         if missing_switches:
-            valid_switches = sorted(fabric_switches.keys())
+            # fabric_switches is now a set, so convert to sorted list
+            valid_switches = sorted(list(fabric_switches))
+            MAX_SWITCHES_IN_ERROR = 10
             error_msg = (
                 f"Switch validation failed: The following switch(es) do not exist in fabric '{fabric_name}':\n"
                 f"  Missing switches: {', '.join(missing_switches)}\n"
@@ -1300,10 +1598,10 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
             )
 
             # Include limited valid switches list for reference
-            if len(valid_switches) <= 10:
+            if len(valid_switches) <= MAX_SWITCHES_IN_ERROR:
                 error_msg += f"Valid switches in fabric: {', '.join(valid_switches)}"
             else:
-                error_msg += f"Valid switches in fabric (first 10): {', '.join(valid_switches[:10])} ... and {len(valid_switches) - 10} more"
+                error_msg += f"Valid switches in fabric (first {MAX_SWITCHES_IN_ERROR}): {', '.join(valid_switches[:MAX_SWITCHES_IN_ERROR])} ... and {len(valid_switches) - MAX_SWITCHES_IN_ERROR} more"
 
             nrm.module.fail_json(
                 msg=error_msg,
@@ -1361,7 +1659,9 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
 
     except NDModuleError as error:
         error_dict = error.to_dict()
-        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
+        # Preserve original API error message with different key to avoid conflict
+        if 'msg' in error_dict:
+            error_dict['api_error_msg'] = error_dict.pop('msg')
         nrm.module.fail_json(
             msg=f"Failed to update VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
@@ -1413,10 +1713,46 @@ def custom_vpc_delete(nrm) -> None:
 
     # CRITICAL: Pre-deletion validation to prevent data loss
     # Checks for active networks, VRFs, and warns about vPC interfaces
-    # TEMPORARY: Commented out due to timeout issues with vpcPairOverview endpoint
-    # TODO: Re-enable once endpoint timeout issue is resolved
     vpc_pair_key = f"{switch_id}-{peer_switch_id}" if peer_switch_id else switch_id
-    # _validate_vpc_pair_deletion(nd_v2, fabric_name, switch_id, vpc_pair_key, nrm.module)
+
+    # Track whether force parameter was actually needed
+    force_delete = nrm.module.params.get("force", False)
+    validation_succeeded = False
+
+    # Perform validation with timeout protection
+    try:
+        _validate_vpc_pair_deletion(nd_v2, fabric_name, switch_id, vpc_pair_key, nrm.module)
+        validation_succeeded = True
+
+        # If force was enabled but validation succeeded, inform user it wasn't needed
+        if force_delete:
+            nrm.module.warn(
+                f"Force deletion was enabled for {vpc_pair_key}, but pre-deletion validation succeeded. "
+                f"The 'force: true' parameter was not necessary in this case. "
+                f"Consider removing 'force: true' to benefit from safety checks in future runs."
+            )
+
+    except (NDModuleError, Exception) as validation_error:
+        # Validation failed - check if force deletion is enabled
+        if not force_delete:
+            nrm.module.fail_json(
+                msg=(
+                    f"Pre-deletion validation failed for VPC pair {vpc_pair_key}. "
+                    f"Error: {str(validation_error)}. "
+                    f"If you're certain the VPC pair can be safely deleted, use 'force: true' parameter. "
+                    f"WARNING: Force deletion bypasses safety checks and may cause data loss."
+                ),
+                vpc_pair_key=vpc_pair_key,
+                validation_error=str(validation_error),
+                force_available=True
+            )
+        else:
+            # Force enabled and validation failed - this is when force was actually needed
+            nrm.module.warn(
+                f"Force deletion enabled for {vpc_pair_key} - bypassing pre-deletion validation. "
+                f"Validation error was: {str(validation_error)}. "
+                f"WARNING: Proceeding without safety checks - ensure no data loss will occur."
+            )
 
     # Build path with switch ID using Manage API (not NDFC API)
     # The NDFC API (/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair) may not be available
@@ -1443,7 +1779,9 @@ def custom_vpc_delete(nrm) -> None:
 
     except NDModuleError as error:
         error_dict = error.to_dict()
-        error_dict.pop('msg', None)  # Remove msg if it exists to avoid duplicate
+        # Preserve original API error message with different key to avoid conflict
+        if 'msg' in error_dict:
+            error_dict['api_error_msg'] = error_dict.pop('msg')
         nrm.module.fail_json(
             msg=f"Failed to delete VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
@@ -1666,6 +2004,21 @@ def main():
         fabric_name=dict(type="str", required=True),
         deploy=dict(type="bool", default=False),
         dry_run=dict(type="bool", default=False),
+        force=dict(
+            type="bool",
+            default=False,
+            description="Force deletion without pre-deletion validation (bypasses safety checks)"
+        ),
+        api_timeout=dict(
+            type="int",
+            default=30,
+            description="API request timeout in seconds for primary operations"
+        ),
+        query_timeout=dict(
+            type="int",
+            default=10,
+            description="API request timeout in seconds for query/recommendation operations"
+        ),
         config=dict(
             type="list",
             elements="dict",
@@ -1703,6 +2056,15 @@ def main():
     # Map dry_run to check_mode
     if dry_run:
         module.check_mode = True
+
+    # Validate force parameter is only used with deleted state
+    force = module.params.get("force", False)
+    state = module.params.get("state", "merged")
+    if force and state != "deleted":
+        module.warn(
+            f"Parameter 'force' only applies to state 'deleted' - ignoring it for state '{state}'. "
+            f"The force parameter bypasses pre-deletion validation checks and has no effect on other states."
+        )
 
     # Normalize config keys for model
     config = module.params.get("config") or []

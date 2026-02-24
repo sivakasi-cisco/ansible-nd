@@ -1,0 +1,232 @@
+- name: ND vPC pair overridden tests
+  hosts: nd
+  gather_facts: false
+  tasks:
+    ##############################################
+    ##                 SETUP                    ##
+    ##############################################
+
+    - name: OVERRIDDEN - Test Entry Point - [nd_vpc_pair]
+      ansible.builtin.debug:
+        msg:
+          - "----------------------------------------------------------------"
+          - "+        Executing Overridden Tests - [nd_vpc_pair]            +"
+          - "----------------------------------------------------------------"
+      tags: overridden
+
+    ##############################################
+    ##      Setup Test Variables                ##
+    ##############################################
+
+    - name: OVERRIDDEN - Setup Test Variables
+      ansible.builtin.set_fact:
+        test_fabric: "{{ fabric_name }}"
+        test_switch1: "{{ switch1_serial }}"
+        test_switch2: "{{ switch2_serial }}"
+      tags: overridden
+
+    ##############################################
+    ##               OVERRIDDEN                 ##
+    ##############################################
+
+    # TC1 - Setup: Create initial VPC Pair
+    - name: OVERRIDDEN - TC1 - DELETED - Clean up any existing VPC pairs
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: deleted
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+      register: cleanup_result
+      ignore_errors: true
+      tags: overridden
+
+    - name: OVERRIDDEN - TC1 - MERGED - Create initial VPC Pair
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: merged
+        deploy: false
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: true
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC1 - ASSERT - Initial VPC pair created
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+      tags: overridden
+
+    # TC2 - Override with same VPC pair but different config (replaces all)
+    - name: OVERRIDDEN - TC2 - OVERRIDDEN - Override VPC Pair configuration
+      cisco.nd.nd_vpc_pair: &vpc_overridden
+        fabric_name: "{{ test_fabric }}"
+        state: overridden
+        deploy: false
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: false
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC2 - ASSERT - VPC pair overridden
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+      tags: overridden
+
+    - name: OVERRIDDEN - TC2 - QUERY - Verify overridden configuration
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+      register: query_result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC2 - ASSERT - Verify configuration replaced
+      ansible.builtin.assert:
+        that:
+          - query_result.failed == false
+          - query_result.current | length > 0
+      tags: overridden
+
+    # TC3 - Idempotence test
+    - name: OVERRIDDEN - TC3 - OVERRIDDEN - Idempotence check
+      cisco.nd.nd_vpc_pair: *vpc_overridden
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC3 - ASSERT - No changes on idempotent run
+      ansible.builtin.assert:
+        that:
+          - result.changed == false
+      tags: overridden
+
+    # TC4 - Override with empty config (deletes all VPC pairs in fabric)
+    - name: OVERRIDDEN - TC4 - OVERRIDDEN - Override with empty config (delete all)
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: overridden
+        config: []
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC4 - ASSERT - All VPC pairs deleted
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+          - result.changed == true
+      tags: overridden
+
+    # TC5 - Override non-existent VPC pairs (creates new)
+    - name: OVERRIDDEN - TC5 - OVERRIDDEN - Override creates new VPC pair
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: overridden
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: true
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC5 - ASSERT - New VPC pair created via override
+      ansible.builtin.assert:
+        that:
+          - result.changed == true
+      tags: overridden
+
+    # TC6 - Override with empty config when no VPC pairs exist (no-op)
+    - name: OVERRIDDEN - TC6 - DELETED - Ensure clean state
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: deleted
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+      ignore_errors: true
+      tags: overridden
+
+    - name: OVERRIDDEN - TC6 - OVERRIDDEN - Override empty with empty (no-op)
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: overridden
+        config: []
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC6 - ASSERT - No changes when overriding empty
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+      tags: overridden
+
+    # TC7 - Override replaces different VPC pair
+    - name: OVERRIDDEN - TC7 - MERGED - Create first VPC pair
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: merged
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: true
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC7 - ASSERT - First VPC pair created
+      ansible.builtin.assert:
+        that:
+          - result.changed == true
+      tags: overridden
+
+    - name: OVERRIDDEN - TC7 - QUERY - Verify first VPC pair exists
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+      register: query_result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC7 - ASSERT - One VPC pair exists
+      ansible.builtin.assert:
+        that:
+          - query_result.current | length == 1
+      tags: overridden
+
+    # TC8 - Dry run test
+    - name: OVERRIDDEN - TC8 - OVERRIDDEN - Dry run
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: overridden
+        dry_run: true
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: false
+      register: result
+      tags: overridden
+
+    - name: OVERRIDDEN - TC8 - ASSERT - Dry run behavior
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+      tags: overridden
+
+    ##############################################
+    ##                 CLEAN-UP                 ##
+    ##############################################
+
+    - name: OVERRIDDEN - CLEANUP - Remove all VPC pairs
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: deleted
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+      ignore_errors: true
+      when: cleanup_at_end | default(true)
+      tags: overridden

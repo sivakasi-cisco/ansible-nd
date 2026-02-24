@@ -231,7 +231,7 @@ class NDNetworkResourceModule(NDModule):
                     proposed_item,
                     unwanted_keys=unwanted_keys
                 )
-                
+
                 # No changes needed
                 if diff_status == "no_diff":
                     self.format_log(
