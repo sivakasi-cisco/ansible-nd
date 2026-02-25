@@ -280,7 +280,7 @@ from ansible.module_utils.basic import AnsibleModule, missing_required_lib
 from ansible_collections.cisco.nd.plugins.module_utils.nd_network_resources import (
     NDNetworkResourceModule,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
+from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDNestedModel
 
 # Enum imports
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
@@ -515,14 +515,14 @@ class VpcPairEndpoints:
 # ===== VPC Pair Model =====
 
 
-class VpcPairModel(NDBaseModel):
+class VpcPairModel(NDNestedModel):
     """
     Pydantic model for VPC pair configuration specific to nd_vpc_pair module.
 
     Uses composite identifier: (switch_id, peer_switch_id)
 
     Note: This model is separate from VpcPairBase in model_playbook_vpc_pair.py because:
-    1. Different base class: NDBaseModel (module-specific) vs NDVpcPairBaseModel (API-generic)
+    1. Different base class: NDNestedModel (module-specific) vs NDVpcPairBaseModel (API-generic)
     2. Different defaults: use_virtual_peer_link=True (module default) vs False (API default)
     3. Different type coercion: bool (strict) vs FlexibleBool (flexible API input)
     4. Module-specific validation and error messages tailored to Ansible user experience
