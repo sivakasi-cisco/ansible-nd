@@ -1281,7 +1281,15 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 processed_switches.add(peer_switch_id)
 
                 # Try recommendation API for useVirtualPeerLink status
-                recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
+                try:
+                    recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
+                except Exception as rec_error:
+                    error_msg = str(rec_error).splitlines()[0]
+                    nrm.module.warn(
+                        f"Recommendation query failed for switch {switch_id}: {error_msg}. "
+                        f"Falling back to direct vPC pair query."
+                    )
+                    recommendation = None
 
                 if recommendation:
                     # VPC pair is fully configured
@@ -1323,7 +1331,15 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 # Check recommendations for:
                 # - All switches if no config provided (gathered state)
                 # - Only switches in user's config if config provided
-                recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
+                try:
+                    recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
+                except Exception as rec_error:
+                    error_msg = str(rec_error).splitlines()[0]
+                    nrm.module.warn(
+                        f"Recommendation query failed for switch {switch_id}: {error_msg}. "
+                        f"Falling back to direct vPC pair query."
+                    )
+                    recommendation = None
 
                 if recommendation:
                     peer_switch_id = _get_api_field_value(recommendation, "serialNumber")
@@ -1977,6 +1993,29 @@ def run_vpc_module(nrm) -> Dict[str, Any]:
             "pending_delete_vpc_pairs": nrm.module.params.get("_pending_delete", []),
         }
         return nrm.result
+
+    # state=deleted with empty config means "delete all existing pairs in this fabric".
+    if state == "deleted" and not config:
+        # Use the live existing collection from NDNetworkResourceModule.
+        # nrm.result["current"] is only populated after add_logs_and_outputs(), so relying on
+        # it here would incorrectly produce an empty delete list.
+        existing_pairs = nrm.existing.to_list() if hasattr(nrm, "existing") else []
+        if not existing_pairs:
+            existing_pairs = nrm.result.get("current", []) or []
+
+        delete_all_config = []
+        for pair in existing_pairs:
+            switch_id = pair.get(VpcFieldNames.SWITCH_ID)
+            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID)
+            if switch_id and peer_switch_id:
+                delete_all_config.append(
+                    {
+                        "switch_id": switch_id,
+                        "peer_switch_id": peer_switch_id,
+                        "use_virtual_peer_link": pair.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True),
+                    }
+                )
+        config = delete_all_config
 
     nrm.manage_state(state=state, new_configs=config)
     nrm.add_logs_and_outputs()
