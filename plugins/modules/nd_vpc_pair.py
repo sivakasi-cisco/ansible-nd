@@ -2026,6 +2026,7 @@ def main():
                 peer1_switch_id=dict(type="str", required=True, aliases=["switch_id"]),
                 peer2_switch_id=dict(type="str", required=True, aliases=["peer_switch_id"]),
                 use_virtual_peer_link=dict(type="bool", default=True),
+                vpc_pair_details=dict(type="dict"),
             ),
         ),
     )
@@ -2075,6 +2076,7 @@ def main():
             "switch_id": item.get("peer1_switch_id") or item.get("switch_id"),
             "peer_switch_id": item.get("peer2_switch_id") or item.get("peer_switch_id"),
             "use_virtual_peer_link": item.get("use_virtual_peer_link", True),
+            "vpc_pair_details": item.get("vpc_pair_details"),
         }
         normalized_config.append(normalized)
 

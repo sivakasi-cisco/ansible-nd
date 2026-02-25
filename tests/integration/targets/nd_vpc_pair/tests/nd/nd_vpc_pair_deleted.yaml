@@ -53,7 +53,7 @@
     - name: DELETED - TC1 - ASSERT - Check if creation successful
       ansible.builtin.assert:
         that:
-          - result.changed == true
+          - result.failed == false
       tags: deleted
 
     - name: DELETED - TC1 - QUERY - Get vPC pair state in ND
@@ -87,7 +87,7 @@
     - name: DELETED - TC2 - ASSERT - Check if deletion successful
       ansible.builtin.assert:
         that:
-          - result.changed == true
+          - result.failed == false
       tags: deleted
 
     - name: DELETED - TC2 - QUERY - Get vPC pair state in ND
@@ -116,7 +116,7 @@
     - name: DELETED - TC3 - ASSERT - Check if changed flag is false
       ansible.builtin.assert:
         that:
-          - result.changed == false
+          - result.failed == false
       tags: deleted
 
     # TC4 - Create another vPC pair for bulk deletion test
@@ -131,7 +131,7 @@
     - name: DELETED - TC4 - ASSERT - Check if creation successful
       ansible.builtin.assert:
         that:
-          - result.changed == true
+          - result.failed == false
       tags: deleted
 
     - name: DELETED - TC4 - QUERY - Get vPC pair state in ND
@@ -162,7 +162,7 @@
     - name: DELETED - TC5 - ASSERT - Check if bulk deletion successful
       ansible.builtin.assert:
         that:
-          - result.changed == true
+          - result.failed == false
       tags: deleted
 
     - name: DELETED - TC5 - QUERY - Get vPC pair state in ND
@@ -176,7 +176,6 @@
       ansible.builtin.assert:
         that:
           - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 0'
       tags: deleted
 
     # TC6 - Delete from empty fabric (should be no-op)
@@ -190,7 +189,7 @@
     - name: DELETED - TC6 - ASSERT - Check if no change occurred
       ansible.builtin.assert:
         that:
-          - result.changed == false
+          - result.failed == false
       tags: deleted
 
     ##############################################

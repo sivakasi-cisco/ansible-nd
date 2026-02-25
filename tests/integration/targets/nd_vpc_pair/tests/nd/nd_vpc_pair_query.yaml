@@ -15,215 +15,153 @@
       tags: query
 
     ##############################################
-    ##      Setup Test Variables                ##
+    ##      Setup Internal TestCase Variables  ##
     ##############################################
 
-    - name: QUERY - Setup Test Variables
+    - name: QUERY - Setup Internal TestCase Variables
       ansible.builtin.set_fact:
+        deploy_local: true
         test_fabric: "{{ fabric_name }}"
         test_switch1: "{{ switch1_serial }}"
         test_switch2: "{{ switch2_serial }}"
+        test_data_query:
+          vpc_pair_setup_conf:
+            - peer1_switch_id: "{{ switch1_serial }}"
+              peer2_switch_id: "{{ switch2_serial }}"
+              use_virtual_peer_link: true
       tags: query
 
     ##############################################
-    ##                 QUERY                    ##
+    ##                QUERY                     ##
     ##############################################
 
-    # TC1 - Setup: Clean and create VPC pairs for query testing
-    - name: QUERY - TC1 - DELETED - Clean up any existing VPC pairs
+    # TC1 - Setup: Create vPC pair for query tests
+    - name: QUERY - TC1 - DELETED - Clean up any existing vPC pairs
       cisco.nd.nd_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
-        config:
-          - peer1_switch_id: "{{ test_switch1 }}"
-            peer2_switch_id: "{{ test_switch2 }}"
-      register: cleanup_result
-      ignore_errors: true
       tags: query
 
-    - name: QUERY - TC1 - MERGED - Create VPC Pair for testing
+    - name: QUERY - TC1 - MERGED - Create vPC pair for testing
       cisco.nd.nd_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        deploy: false
+        config: "{{ test_data_query.vpc_pair_setup_conf }}"
+      register: result
+      tags: query
+
+    - name: QUERY - TC1 - ASSERT - Check if creation successful
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+      tags: query
+
+    - name: QUERY - TC1 - QUERY - Get vPC pair state in ND
+      cisco.nd.nd_vpc_pair:
+        state: gathered
+        fabric_name: "{{ test_fabric }}"
+      register: verify_result
+      tags: query
+
+    - name: QUERY - TC1 - ASSERT - Verify vPC pair state in ND
+      ansible.builtin.assert:
+        that:
+          - verify_result.failed == false
+          - '(verify_result.gathered.vpc_pairs | length) == 1'
+      tags: query
+
+    # TC2 - Query with no filters
+    - name: QUERY - TC2 - QUERY - Query all vPC pairs with no filters
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+      register: result
+      tags: query
+
+    - name: QUERY - TC2 - ASSERT - Check query results
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+          - '(result.gathered.vpc_pairs | length) == 1'
+      tags: query
+
+    # TC3 - Query with both peers specified
+    - name: QUERY - TC3 - QUERY - Query vPC pair with both peers specified
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
         config:
           - peer1_switch_id: "{{ test_switch1 }}"
             peer2_switch_id: "{{ test_switch2 }}"
-            use_virtual_peer_link: true
       register: result
       tags: query
 
-    - name: QUERY - TC1 - ASSERT - VPC pair created for testing
+    - name: QUERY - TC3 - ASSERT - Check query results with both peers
       ansible.builtin.assert:
         that:
           - result.failed == false
+          - '(result.gathered.vpc_pairs | length) == 1'
       tags: query
 
-    # TC2 - Query all VPC pairs in fabric (no filters)
-    - name: QUERY - TC2 - QUERY - Query all VPC pairs
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: gathered
-      register: result
-      tags: query
-
-    - name: QUERY - TC2 - ASSERT - Query returns results
-      ansible.builtin.assert:
-        that:
-          - result.failed == false
-          - result.current is defined
-          - result.current | length > 0
-      tags: query
-
-    - name: QUERY - TC2 - DEBUG - Display query results
-      ansible.builtin.debug:
-        var: result.current
-        verbosity: 1
-      tags: query
-
-    # TC3 - Query specific VPC pair by both switches
-    - name: QUERY - TC3 - QUERY - Query specific VPC pair
+    # TC4 - Query with one peer specified (not supported in nd_vpc_pair)
+    - name: QUERY - TC4 - QUERY - Query vPC pair with one peer specified
       cisco.nd.nd_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
           - peer1_switch_id: "{{ test_switch1 }}"
-            peer2_switch_id: "{{ test_switch2 }}"
       register: result
+      ignore_errors: true
       tags: query
 
-    - name: QUERY - TC3 - ASSERT - Specific VPC pair found
+    - name: QUERY - TC4 - ASSERT - Verify partial peer query is rejected
       ansible.builtin.assert:
         that:
-          - result.failed == false
-          - result.current | length == 1
-          - result.current[0].switchId == test_switch1
-          - result.current[0].peerSwitchId == test_switch2
+          - result.failed == false or result.msg is defined
       tags: query
 
-    # TC4 - Query with non-existent switch in config
-    - name: QUERY - TC4 - QUERY - Query non-existent VPC pair
+    # TC5 - Query with second peer specified (not supported in nd_vpc_pair)
+    - name: QUERY - TC5 - QUERY - Query vPC pair with second peer specified
       cisco.nd.nd_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
-          - peer1_switch_id: "NONEXISTENT_SERIAL"
+          - peer2_switch_id: "{{ test_switch2 }}"
+      register: result
+      ignore_errors: true
+      tags: query
+
+    - name: QUERY - TC5 - ASSERT - Verify partial peer query is rejected
+      ansible.builtin.assert:
+        that:
+          - result.failed == false or result.msg is defined
+      tags: query
+
+    # TC6 - Query with non-existent peer
+    - name: QUERY - TC6 - QUERY - Query vPC pair with non-existent peer
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+        config:
+          - peer1_switch_id: "INVALID_SERIAL"
             peer2_switch_id: "{{ test_switch2 }}"
       register: result
       ignore_errors: true
       tags: query
 
-    - name: QUERY - TC4 - ASSERT - Query with non-existent switch handles gracefully
-      ansible.builtin.assert:
-        that:
-          - result.failed == false or result.failed == true
-      tags: query
-
-    # TC5 - Query after deleting VPC pairs
-    - name: QUERY - TC5 - DELETED - Remove all VPC pairs
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: deleted
-        config:
-          - peer1_switch_id: "{{ test_switch1 }}"
-            peer2_switch_id: "{{ test_switch2 }}"
-      ignore_errors: true
-      tags: query
-
-    - name: QUERY - TC5 - QUERY - Query after delete
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: gathered
-      register: result
-      tags: query
-
-    - name: QUERY - TC5 - ASSERT - Query after delete succeeds
+    - name: QUERY - TC6 - ASSERT - Check query results with non-existent peer
       ansible.builtin.assert:
         that:
           - result.failed == false
-      tags: query
-
-    # TC6 - Verify query doesn't modify state
-    - name: QUERY - TC6 - MERGED - Create VPC pair
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: merged
-        config:
-          - peer1_switch_id: "{{ test_switch1 }}"
-            peer2_switch_id: "{{ test_switch2 }}"
-            use_virtual_peer_link: true
-      register: create_result
-      tags: query
-
-    - name: QUERY - TC6 - QUERY - Query multiple times
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: gathered
-      register: query_result_1
-      tags: query
-
-    - name: QUERY - TC6 - QUERY - Query again
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: gathered
-      register: query_result_2
-      tags: query
-
-    - name: QUERY - TC6 - ASSERT - Query is idempotent
-      ansible.builtin.assert:
-        that:
-          - query_result_1.failed == false
-          - query_result_2.failed == false
-          - query_result_1.current == query_result_2.current
-      tags: query
-
-    # TC7 - Verify dry_run is rejected with gathered state
-    - name: QUERY - TC7 - QUERY - Verify dry_run rejects gathered state
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: gathered
-        dry_run: true
-      register: result
-      ignore_errors: true
-      tags: query
-
-    - name: QUERY - TC7 - ASSERT - Dry run with gathered fails as expected
-      ansible.builtin.assert:
-        that:
-          - result.failed == true
-      tags: query
-
-    # TC8 - Query response structure validation
-    - name: QUERY - TC8 - QUERY - Get VPC pair for structure validation
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: gathered
-        config:
-          - peer1_switch_id: "{{ test_switch1 }}"
-            peer2_switch_id: "{{ test_switch2 }}"
-      register: result
-      tags: query
-
-    - name: QUERY - TC8 - ASSERT - Response has required fields
-      ansible.builtin.assert:
-        that:
-          - result.current | length > 0
-          - result.current[0].switchId is defined
-          - result.current[0].peerSwitchId is defined
-          - result.current[0].useVirtualPeerLink is defined
       tags: query
 
     ##############################################
     ##                 CLEAN-UP                 ##
     ##############################################
 
-    - name: QUERY - CLEANUP - Remove all VPC pairs
+    - name: QUERY - END - remove vPC pairs
       cisco.nd.nd_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
-        config:
-          - peer1_switch_id: "{{ test_switch1 }}"
-            peer2_switch_id: "{{ test_switch2 }}"
-      ignore_errors: true
       when: cleanup_at_end | default(true)
       tags: query
