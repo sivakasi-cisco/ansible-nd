@@ -285,14 +285,17 @@ from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDNest
 # Enum imports
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
 from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
+    ComponentTypeSupportEnum,
     VpcActionEnum,
     VpcFieldNames,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_endpoints import (
+    EpVpcPairConsistencyGet,
     EpVpcPairGet,
     EpVpcPairPut,
     EpVpcPairOverviewGet,
     EpVpcPairRecommendationGet,
+    EpVpcPairSupportGet,
     EpVpcPairsListGet,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
@@ -374,6 +377,20 @@ class VpcPairEndpoints:
         Example:
             >>> VpcPairEndpoints.vpc_pair_base("myFabric")
             '/api/v1/manage/fabrics/myFabric/vpcPairs'
+        """
+        endpoint = EpVpcPairsListGet(fabric_name=fabric_name)
+        return endpoint.path
+
+    @staticmethod
+    def vpc_pairs_list(fabric_name: str) -> str:
+        """
+        Get path for querying VPC pairs list in a fabric.
+
+        Args:
+            fabric_name: Fabric name
+
+        Returns:
+            VPC pairs list path
         """
         endpoint = EpVpcPairsListGet(fabric_name=fabric_name)
         return endpoint.path
@@ -472,6 +489,46 @@ class VpcPairEndpoints:
         endpoint = EpVpcPairOverviewGet(fabric_name=fabric_name, switch_id=switch_id)
         base_path = endpoint.path
         return f"{base_path}?componentType={component_type}"
+
+    @staticmethod
+    def switch_vpc_support(
+        fabric_name: str,
+        switch_id: str,
+        component_type: str = ComponentTypeSupportEnum.CHECK_PAIRING.value,
+    ) -> str:
+        """
+        Get path for querying VPC pair support details.
+
+        Args:
+            fabric_name: Fabric name
+            switch_id: Switch serial number
+            component_type: Support check type
+
+        Returns:
+            VPC support path with query parameters
+        """
+        endpoint = EpVpcPairSupportGet(
+            fabric_name=fabric_name,
+            switch_id=switch_id,
+            component_type=component_type,
+        )
+        base_path = endpoint.path
+        return f"{base_path}?componentType={component_type}"
+
+    @staticmethod
+    def switch_vpc_consistency(fabric_name: str, switch_id: str) -> str:
+        """
+        Get path for querying VPC pair consistency details.
+
+        Args:
+            fabric_name: Fabric name
+            switch_id: Switch serial number
+
+        Returns:
+            VPC consistency path
+        """
+        endpoint = EpVpcPairConsistencyGet(fabric_name=fabric_name, switch_id=switch_id)
+        return endpoint.path
 
     @staticmethod
     def fabric_config_save(fabric_name: str) -> str:
@@ -870,7 +927,6 @@ def _get_recommendation_details(nd_v2, fabric_name: str, switch_id: str, timeout
             )
 
         return None
-
     except NDModuleError as error:
         # Handle expected error codes gracefully
         if error.status == 404:
@@ -886,6 +942,123 @@ def _get_recommendation_details(nd_v2, fabric_name: str, switch_id: str, timeout
             return None
         # Let other errors (timeouts, rate limits) propagate
         raise
+
+
+def _extract_vpc_pairs_from_list_response(vpc_pairs_response: Any) -> List[Dict[str, Any]]:
+    """
+    Extract VPC pair list entries from /vpcPairs response payload.
+
+    Supports common response wrappers used by ND API.
+    """
+    if not isinstance(vpc_pairs_response, dict):
+        return []
+
+    candidates = None
+    for key in (VpcFieldNames.VPC_PAIRS, "items", VpcFieldNames.DATA):
+        value = vpc_pairs_response.get(key)
+        if isinstance(value, list):
+            candidates = value
+            break
+
+    if not isinstance(candidates, list):
+        return []
+
+    extracted_pairs = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+
+        switch_id = item.get(VpcFieldNames.SWITCH_ID)
+        peer_switch_id = item.get(VpcFieldNames.PEER_SWITCH_ID)
+
+        # Handle alternate response shape if switch IDs are nested under "switch"/"peerSwitch"
+        if isinstance(switch_id, dict) and isinstance(peer_switch_id, dict):
+            switch_id = switch_id.get("switch")
+            peer_switch_id = peer_switch_id.get("peerSwitch")
+
+        if not switch_id or not peer_switch_id:
+            continue
+
+        extracted_pairs.append(
+            {
+                VpcFieldNames.SWITCH_ID: switch_id,
+                VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                VpcFieldNames.USE_VIRTUAL_PEER_LINK: item.get(
+                    VpcFieldNames.USE_VIRTUAL_PEER_LINK, True
+                ),
+            }
+        )
+
+    return extracted_pairs
+
+
+def _get_pairing_support_details(
+    nd_v2,
+    fabric_name: str,
+    switch_id: str,
+    component_type: str = ComponentTypeSupportEnum.CHECK_PAIRING.value,
+    timeout: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Query /vpcPairSupport endpoint to validate pairing support.
+    """
+    if not fabric_name or not isinstance(fabric_name, str):
+        raise ValueError(f"Invalid fabric_name: {fabric_name}")
+    if not switch_id or not isinstance(switch_id, str) or len(switch_id) < 3:
+        raise ValueError(f"Invalid switch_id: {switch_id}")
+
+    path = VpcPairEndpoints.switch_vpc_support(
+        fabric_name=fabric_name,
+        switch_id=switch_id,
+        component_type=component_type,
+    )
+
+    if timeout is None:
+        timeout = nd_v2.module.params.get("query_timeout", 10)
+
+    rest_send = nd_v2._get_rest_send()
+    rest_send.save_settings()
+    rest_send.timeout = timeout
+    try:
+        support_details = nd_v2.request(path, HttpVerbEnum.GET)
+    finally:
+        rest_send.restore_settings()
+
+    if isinstance(support_details, dict):
+        return support_details
+    return None
+
+
+def _get_consistency_details(
+    nd_v2,
+    fabric_name: str,
+    switch_id: str,
+    timeout: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Query /vpcPairConsistency endpoint for consistency diagnostics.
+    """
+    if not fabric_name or not isinstance(fabric_name, str):
+        raise ValueError(f"Invalid fabric_name: {fabric_name}")
+    if not switch_id or not isinstance(switch_id, str) or len(switch_id) < 3:
+        raise ValueError(f"Invalid switch_id: {switch_id}")
+
+    path = VpcPairEndpoints.switch_vpc_consistency(fabric_name, switch_id)
+
+    if timeout is None:
+        timeout = nd_v2.module.params.get("query_timeout", 10)
+
+    rest_send = nd_v2._get_rest_send()
+    rest_send.save_settings()
+    rest_send.timeout = timeout
+    try:
+        consistency_details = nd_v2.request(path, HttpVerbEnum.GET)
+    finally:
+        rest_send.restore_settings()
+
+    if isinstance(consistency_details, dict):
+        return consistency_details
+    return None
 
 
 def _validate_fabric_switches(nd_v2, fabric_name: str) -> Dict[str, Dict]:
@@ -1073,6 +1246,25 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
             )
             return
 
+        # Query consistency endpoint for additional diagnostics before deletion.
+        # This is best effort and should not block deletion workflows.
+        try:
+            consistency = _get_consistency_details(nd_v2, fabric_name, switch_id)
+            if consistency:
+                type2_consistency = _get_api_field_value(consistency, "type2Consistency", None)
+                if type2_consistency is False:
+                    reason = _get_api_field_value(
+                        consistency, "type2ConsistencyReason", "unknown reason"
+                    )
+                    module.warn(
+                        f"VPC pair {vpc_pair_key} reports type2 consistency issue: {reason}"
+                    )
+        except Exception as consistency_error:
+            module.warn(
+                f"Failed to query consistency details for VPC pair {vpc_pair_key}: "
+                f"{str(consistency_error).splitlines()[0]}"
+            )
+
         # Validate response structure
         if not isinstance(response, dict):
             module.fail_json(
@@ -1248,8 +1440,25 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         }
         nrm.module.params["_ip_to_sn_mapping"] = ip_to_sn
         
-        # Step 2: Track 3-state VPC pairs (GetHave.refresh())
+        # Step 2: Seed existing VPC pairs from list endpoint (/vpcPairs)
         have = []
+        try:
+            list_path = VpcPairEndpoints.vpc_pairs_list(fabric_name)
+            rest_send = nd_v2._get_rest_send()
+            rest_send.save_settings()
+            rest_send.timeout = nrm.module.params.get("query_timeout", 10)
+            try:
+                vpc_pairs_response = nd_v2.request(list_path, HttpVerbEnum.GET)
+            finally:
+                rest_send.restore_settings()
+            have.extend(_extract_vpc_pairs_from_list_response(vpc_pairs_response))
+        except Exception as list_error:
+            nrm.module.warn(
+                f"VPC pairs list query failed for fabric {fabric_name}: "
+                f"{str(list_error).splitlines()[0]}. Continuing with switch-level queries."
+            )
+
+        # Step 3: Track 3-state VPC pairs (GetHave.refresh())
         pending_create = []
         pending_delete = []
         processed_switches = set()
@@ -1380,7 +1589,7 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                                 VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                             })
         
-        # Step 3: Store all states for use in create/update/delete
+        # Step 4: Store all states for use in create/update/delete
         nrm.module.params["_have"] = have
         nrm.module.params["_pending_create"] = pending_create
         nrm.module.params["_pending_delete"] = pending_delete
@@ -1389,10 +1598,11 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         existing_pairs = []
         seen_keys = set()
         for pair in have + pending_create + pending_delete:
-            key = (
-                pair.get(VpcFieldNames.SWITCH_ID),
-                pair.get(VpcFieldNames.PEER_SWITCH_ID),
-            )
+            switch_id = pair.get(VpcFieldNames.SWITCH_ID)
+            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID)
+            if not switch_id or not peer_switch_id:
+                continue
+            key = tuple(sorted([switch_id, peer_switch_id]))
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -1510,6 +1720,36 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
 
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
+
+    # Validate pairing support using dedicated endpoint.
+    # Only fail when API explicitly states pairing is not allowed.
+    try:
+        support_details = _get_pairing_support_details(
+            nd_v2,
+            fabric_name=fabric_name,
+            switch_id=switch_id,
+            component_type=ComponentTypeSupportEnum.CHECK_PAIRING.value,
+        )
+        if support_details:
+            is_pairing_allowed = _get_api_field_value(
+                support_details, "isPairingAllowed", None
+            )
+            if is_pairing_allowed is False:
+                reason = _get_api_field_value(
+                    support_details, "reason", "pairing blocked by support checks"
+                )
+                nrm.module.fail_json(
+                    msg=f"VPC pairing is not allowed for switch {switch_id}: {reason}",
+                    fabric=fabric_name,
+                    switch_id=switch_id,
+                    peer_switch_id=peer_switch_id,
+                    support_details=support_details,
+                )
+    except Exception as support_error:
+        nrm.module.warn(
+            f"Pairing support check failed for switch {switch_id}: "
+            f"{str(support_error).splitlines()[0]}. Continuing with create operation."
+        )
 
     # Build path with switch ID using Manage API (not NDFC API)
     # The NDFC API (/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair) may not be available
