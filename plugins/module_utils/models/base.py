@@ -15,7 +15,7 @@ from typing_extensions import Self
 
 
 # TODO: Revisit identifiers strategy (low priority)
-# TODO: add kwargs to every sub method
+# NOTE: what about List of NestedModels? -> make it a separate Sub Model
 class NDBaseModel(BaseModel, ABC):
     """
     Base model for all Nexus Dashboard API objects.
@@ -24,24 +24,25 @@ class NDBaseModel(BaseModel, ABC):
     - single: One unique required field (e.g., ["login_id"])
     - composite: Multiple required fields as tuple (e.g., ["device", "interface"])
     - hierarchical: Priority-ordered fields (e.g., ["uuid", "name"])
-    - none: no identifiers required (e.g., only a single instance can exist in Nexus Dasboard)
+    - singleton: no identifiers required (e.g., only a single instance can exist in Nexus Dasboard)
     """
     # TODO: revisit initial Model Configurations (low priority)
-    # TODO: enable extra
     model_config = ConfigDict(
         str_strip_whitespace=True,
         use_enum_values=True,
         validate_assignment=True,
         populate_by_name=True,
-        extra='ignore'
+        extra='allow',  # NOTE: enabled extra: allows to add extra Field infos for generating Ansible argument_spec and Module Docs
     )
 
     # TODO: Revisit identifiers strategy (low priority)
     identifiers: ClassVar[Optional[List[str]]] = None
-    identifier_strategy: ClassVar[Optional[Literal["single", "composite", "hierarchical", "none"]]] = "none"
+    # TODO: Revisit no identifiers strategy naming (`singleton` -> `unique`, `unnamed`) (low priority)
+    identifier_strategy: ClassVar[Optional[Literal["single", "composite", "hierarchical", "singleton"]]] = "singleton"
     
     # Optional: fields to exclude from diffs (e.g., passwords)
-    exclude_from_diff: ClassVar[List[str]] = []
+    exclude_from_diff: ClassVar[List] = []
+    # TODO: To be removed in the future (see local_user model)
     unwanted_keys: ClassVar[List] = []
 
     # TODO: Revisit it with identifiers strategy (low priority)
@@ -52,7 +53,6 @@ class NDBaseModel(BaseModel, ABC):
         super().__init_subclass__(**kwargs)
         
         # Skip enforcement for nested models
-        # TODO: Remove if `NDNestedModel` is a separated BaseModel (low priority)
         if cls.__name__ in ["NDNestedModel"] or any(base.__name__ == "NDNestedModel" for base in cls.__mro__):
             return
 
@@ -64,37 +64,39 @@ class NDBaseModel(BaseModel, ABC):
         if not hasattr(cls, "identifier_strategy") or cls.identifier_strategy is None:
             raise ValueError(
                 f"Class {cls.__name__} must define 'identifiers' and 'identifier_strategy'."
-                f"Example: `identifier_strategy: ClassVar[Optional[Literal['single', 'composite', 'hierarchical', 'none']]] = 'single'`"
+                f"Example: `identifier_strategy: ClassVar[Optional[Literal['single', 'composite', 'hierarchical', 'singleton']]] = 'single'`"
             )
-    
-    # NOTE: Might not need to make them absractmethod because of the Pydantic built-in methods (low priority)
-    # NOTE: Should we use keyword arguments?
-    @abstractmethod
+
     def to_payload(self, **kwargs) -> Dict[str, Any]:
         """
         Convert model to API payload format.
         """
-        pass
+        return self.model_dump(by_alias=True, exclude_none=True, **kwargs)
+    
+    def to_config(self, **kwargs) -> Dict[str, Any]:
+        """
+        Convert model to Ansible config format.
+        """
+        return self.model_dump(by_name=True, exclude_none=True, **kwargs)
+
+    @classmethod
+    def from_response(cls, response: Dict[str, Any], **kwargs) -> Self:
+        return cls.model_validate(response, by_alias=True, **kwargs)
     
     @classmethod
-    @abstractmethod
-    def from_response(cls, response: Dict[str, Any], **kwargs) -> Self:
-        """
-        Create model instance from API response.
-        """
-        pass
+    def from_config(cls, ansible_config: Dict[str, Any], **kwargs) -> Self:
+        return cls.model_validate(ansible_config, by_name=True, **kwargs)
     
     # TODO: Revisit this function when revisiting identifier strategy (low priority)
-    # TODO: Add condition when there is no identifiers (high priority)
-    def get_identifier_value(self) -> Union[str, int, Tuple[Any, ...]]:
+    def get_identifier_value(self, **kwargs) -> Union[str, int, Tuple[Any, ...]]:
         """
         Extract identifier value(s) from this instance:
         - single identifier: Returns field value.
         - composite identifiers: Returns tuple of all field values.
         - hierarchical identifiers: Returns tuple of (field_name, value) for first non-None field.
         """
-        if not self.identifiers:
-            raise ValueError(f"{self.__class__.__name__} has no identifiers defined")
+        if not self.identifiers and self.identifier_strategy != "singleton":
+            raise ValueError(f"{self.__class__.__name__} must have identifiers defined with its current identifier strategy: `{self.identifier_strategy}`")
         
         if self.identifier_strategy == "single":
             value = getattr(self, self.identifiers[0], None)
@@ -133,23 +135,28 @@ class NDBaseModel(BaseModel, ABC):
                 f"No non-None value in hierarchical fields {self.identifiers}"
             )
         
+        # TODO: Revisit condition when there is no identifiers (low priority)
+        elif self.identifier_strategy == "singleton":
+            return None
+        
         else:
             raise ValueError(f"Unknown identifier strategy: {self.identifier_strategy}")
     
 
-    def to_diff_dict(self) -> Dict[str, Any]:
+    def to_diff_dict(self, **kwargs) -> Dict[str, Any]:
         """
         Export for diff comparison (excludes sensitive fields).
         """
         return self.model_dump(
             by_alias=True,
             exclude_none=True,
-            exclude=set(self.exclude_from_diff)
+            exclude=set(self.exclude_from_diff),
+            **kwargs
         )
     
     # NOTE: initialize and return a deep copy of the instance?
     # TODO: Might be missing a proper merge on fields of type `List[NDNestedModel]`? -> similar to NDCOnfigCollection... -> add argument to make it optional either replace
-    def merge(self, other_model: "NDBaseModel") -> Self:
+    def merge(self, other_model: "NDBaseModel", **kwargs) -> Self:
         if not isinstance(other_model, type(self)):
             # TODO: Change error message
             return TypeError("models are not of the same type.")
@@ -165,25 +172,3 @@ class NDBaseModel(BaseModel, ABC):
             else:
                 setattr(self, field, value)
         return self
-
-# TODO: Make it a seperated BaseModel (low priority)
-class NDNestedModel(NDBaseModel):
-    """
-    Base for nested models without identifiers.
-    """
-
-    # TODO: Configuration Fields to be clearly defined here (low priority)
-    identifiers: ClassVar[List[str]] = []
-
-    def to_payload(self) -> Dict[str, Any]:
-        """
-        Convert model to API payload format.
-        """
-        return self.model_dump(by_alias=True, exclude_none=True)
-    
-    @classmethod
-    def from_response(cls, response: Dict[str, Any]) -> Self:
-        """
-        Create model instance from API response.
-        """
-        return cls.model_validate(response, by_alias=True)

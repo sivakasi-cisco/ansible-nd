@@ -27,18 +27,18 @@ class LocalUserOrchestrator(NDBaseOrchestrator):
 
     model_class: Type[NDBaseModel] = LocalUserModel
 
-    post_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersPost
-    put_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersPut
+    create_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersPost
+    update_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersPut
     delete_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersDelete
-    get_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersGet
+    query_one_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersGet
+    query_all_endpoint: Type[NDBaseSmartEndpoint] = EpApiV1InfraAaaLocalUsersGet
 
     def query_all(self):
         """
         Custom query_all action to extract 'localusers' from response.
         """
         try:
-            result = self.module.query_obj(self.get_endpoint.base_path)
+            result = self.module.query_obj(self.query_all_endpoint.base_path)
             return result.get("localusers", []) or []
         except Exception as e:
             raise Exception(f"Query all failed: {e}") from e
-    

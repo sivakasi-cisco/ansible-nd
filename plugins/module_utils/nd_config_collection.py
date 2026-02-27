@@ -14,14 +14,12 @@ from copy import deepcopy
 # TODO: To be replaced with: from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDBaseModel
 from .models.base import NDBaseModel
 from .utils import issubset
+from .types import IdentifierKey
 
 # Type aliases
-# NOTE: Maybe add more type aliases in the future if needed
 ModelType = TypeVar('ModelType', bound=NDBaseModel)
-# TODO: Defined the same acros multiple files -> maybe move to constants.py
-IdentifierKey = Union[str, int, Tuple[Any, ...]]
 
-# TODO:Might make it a Pydantic RootModel (low priority but medium impact on NDNetworkResourceModule)
+
 class NDConfigCollection(Generic[ModelType]):
     """
     Nexus Dashboard configuration collection for NDBaseModel instances.
@@ -59,7 +57,7 @@ class NDConfigCollection(Generic[ModelType]):
             key = self._extract_key(item)
             self._index[key] = index
     
-    # Core CRUD Operations
+    # Core Operations
     
     def add(self, item: ModelType) -> IdentifierKey:
         """
@@ -142,7 +140,7 @@ class NDConfigCollection(Generic[ModelType]):
     # Diff Operations
     
     # NOTE: Maybe add a similar one in the NDBaseModel (-> but is it necessary?)
-    def get_diff_config(self, new_item: ModelType, unwanted_keys: Optional[List[Union[str, List[str]]]] = None) -> Literal["new", "no_diff", "changed"]:
+    def get_diff_config(self, new_item: ModelType) -> Literal["new", "no_diff", "changed"]:
         """
         Compare single item against collection.
         """
@@ -156,18 +154,14 @@ class NDConfigCollection(Generic[ModelType]):
         if existing is None:
             return "new"
 
+        # TODO: make a diff class level method for NDBaseModel
         existing_data = existing.to_diff_dict()
         new_data = new_item.to_diff_dict()
-        
-        if unwanted_keys:
-            existing_data = self._remove_unwanted_keys(existing_data, unwanted_keys)
-            new_data = self._remove_unwanted_keys(new_data, unwanted_keys)
-
         is_subset = issubset(new_data, existing_data)
         
         return "no_diff" if is_subset else "changed"
     
-    def get_diff_collection(self, other: "NDConfigCollection[ModelType]", unwanted_keys: Optional[List[Union[str, List[str]]]] = None) -> bool:
+    def get_diff_collection(self, other: "NDConfigCollection[ModelType]") -> bool:
         """
         Check if two collections differ.
         """
@@ -178,7 +172,7 @@ class NDConfigCollection(Generic[ModelType]):
             return True
 
         for item in other:
-            if self.get_diff_config(item, unwanted_keys) != "no_diff":
+            if self.get_diff_config(item) != "no_diff":
                 return True
 
         for key in self.keys():
@@ -195,32 +189,6 @@ class NDConfigCollection(Generic[ModelType]):
         other_keys = set(other.keys())
         return list(current_keys - other_keys)
 
-    # TODO: Maybe not necessary
-    def _remove_unwanted_keys(self, data: Dict, unwanted_keys: List[Union[str, List[str]]]) -> Dict:
-        """Remove unwanted keys from dict (supports nested paths)."""
-        data = deepcopy(data)
-        
-        for key in unwanted_keys:
-            if isinstance(key, str):
-                if key in data:
-                    del data[key]
-            
-            elif isinstance(key, list) and len(key) > 0:
-                try:
-                    parent = data
-                    for k in key[:-1]:
-                        if isinstance(parent, dict) and k in parent:
-                            parent = parent[k]
-                        else:
-                            break
-                    else:
-                        if isinstance(parent, dict) and key[-1] in parent:
-                            del parent[key[-1]]
-                except (KeyError, TypeError, IndexError):
-                    pass
-        
-        return data
- 
     # Collection Operations
     
     def __len__(self) -> int:
@@ -244,30 +212,30 @@ class NDConfigCollection(Generic[ModelType]):
 
     # Collection Serialization
 
-    def to_list(self, **kwargs) -> List[Dict]:
+    def to_ansible_config(self, **kwargs) -> List[Dict]:
         """
-        Export as list of dicts (with aliases).
+        Export as an Ansible config.
         """
-        return [item.model_dump(by_alias=True, exclude_none=True, **kwargs) for item in self._items]
+        return [item.to_config(**kwargs) for item in self._items]
     
-    def to_payload_list(self) -> List[Dict[str, Any]]:
+    def to_payload_list(self, **kwargs) -> List[Dict[str, Any]]:
         """
         Export as list of API payloads.
         """
-        return [item.to_payload() for item in self._items]
+        return [item.to_payload(**kwargs) for item in self._items]
     
     @classmethod
-    def from_list(cls, data: List[Dict], model_class: type[ModelType]) -> "NDConfigCollection[ModelType]":
+    def from_ansible_config(cls, data: List[Dict], model_class: type[ModelType], **kwargs) -> "NDConfigCollection[ModelType]":
         """
-        Create collection from list of dicts.
+        Create collection from Ansible config.
         """
-        items = [model_class.model_validate(item_data, by_name=True) for item_data in data]
+        items = [model_class.from_config(item_data, **kwargs) for item_data in data]
         return cls(model_class=model_class, items=items)
     
     @classmethod
-    def from_api_response(cls, response_data: List[Dict[str, Any]], model_class: type[ModelType]) -> "NDConfigCollection[ModelType]":
+    def from_api_response(cls, response_data: List[Dict[str, Any]], model_class: type[ModelType], **kwargs) -> "NDConfigCollection[ModelType]":
         """
         Create collection from API response.
         """
-        items = [model_class.from_response(item_data) for item_data in response_data]
+        items = [model_class.from_response(item_data, **kwargs) for item_data in response_data]
         return cls(model_class=model_class, items=items)
