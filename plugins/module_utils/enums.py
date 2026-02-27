@@ -11,7 +11,7 @@ Enum definitions for Nexus Dashboard Ansible modules.
 ## Enums
 
 - HttpVerbEnum: Enum for HTTP verb values used in endpoints.
-- OperationType: Enum for operation types used by ResultsV2 to determine if changes have occurred.
+- OperationType: Enum for operation types used by Results to determine if changes have occurred.
 """
 
 from __future__ import absolute_import, annotations, division, print_function
@@ -21,6 +21,7 @@ __metaclass__ = type
 # pylint: enable=invalid-name
 
 from enum import Enum
+
 
 class BooleanStringEnum(str, Enum):
     """
@@ -36,6 +37,8 @@ class BooleanStringEnum(str, Enum):
 
     TRUE = "true"
     FALSE = "false"
+
+
 class HttpVerbEnum(str, Enum):
     """
     # Summary
@@ -69,13 +72,15 @@ class HttpVerbEnum(str, Enum):
         - A list of string values representing the enum members.
         """
         return sorted([member.value for member in cls])
+
+
 class OperationType(Enum):
     """
     # Summary
 
     Enumeration for operation types.
 
-    Used by ResultsV2 to determine if changes have occurred based on the operation type.
+    Used by Results to determine if changes have occurred based on the operation type.
 
     - QUERY: Represents a query operation which does not change state.
     - CREATE: Represents a create operation which adds new resources.
@@ -94,7 +99,7 @@ class OperationType(Enum):
     The above informs the Results class that the current operation is a query, and thus
     no changes should be expected.
 
-    Specifically, Results.has_anything_changed() will return False for QUERY operations,
+    Specifically, Results._determine_if_changed() will return False for QUERY operations,
     while it will evaluate CREATE, UPDATE, and DELETE operations in more detail to
     determine if any changes have occurred.
     """

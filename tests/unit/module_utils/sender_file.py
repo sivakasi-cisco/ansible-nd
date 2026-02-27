@@ -19,7 +19,6 @@ __metaclass__ = type
 import copy
 import inspect
 import logging
-
 from typing import Any, Optional
 
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
@@ -165,7 +164,7 @@ class Sender:
 
         ## Raises
 
-        None
+        -   getter: `ValueError` if `path` is not set before accessing.
 
         ## Example
 

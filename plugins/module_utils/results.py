@@ -277,7 +277,7 @@ class Results:
     }
     ```
 
-    diff, response, and result dicts are per the Ansible DCNM Collection standard output.
+    diff, response, and result dicts are per the Ansible ND Collection standard output.
 
     An example of a result dict would be (sequence_number is added by Results):
 
@@ -310,7 +310,7 @@ class Results:
     ```python
     from ansible_collections.cisco.nd.plugins.module_utils.enums import OperationType
     from ansible_collections.cisco.nd.plugins.module_utils.results import Results
-    from ansible_collections.cisco.nd.plugins.module_utils.rest_send_v2 import RestSend
+    from ansible_collections.cisco.nd.plugins.module_utils.rest_send import RestSend
     ...
     class FabricDelete:
         def __init__(self, ansible_module):
@@ -347,7 +347,7 @@ class Results:
     def __init__(self) -> None:
         self.class_name: str = self.__class__.__name__
 
-        self.log: logging.Logger = logging.getLogger(f"dcnm.{self.class_name}")
+        self.log: logging.Logger = logging.getLogger(f"nd.{self.class_name}")
 
         # Task sequence tracking
         self.task_sequence_number: int = 0
@@ -766,7 +766,7 @@ class Results:
 
         ## See also
 
-        -  `add_changed()` method to add to the changed set.
+        -  `register_task_result()` method to register tasks and update the changed set.
         """
         return self._changed
 
@@ -845,11 +845,11 @@ class Results:
 
         ## Raises
 
-        - `TypeError` if value is not a bool.
+        None
 
         ## See also
 
-        -  `add_failed()` method to add to the failed set.
+        -  `register_task_result()` method to register tasks and update the failed set.
         """
         return self._failed
 
