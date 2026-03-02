@@ -157,6 +157,126 @@
           - result.failed == false
       tags: gather
 
+    # TC7 - Gather with custom query_timeout
+    - name: GATHER - TC7 - GATHER - Gather with query_timeout override
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+        query_timeout: 20
+      register: result
+      tags: gather
+
+    - name: GATHER - TC7 - ASSERT - Verify query_timeout path execution
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+          - result.gathered is defined
+      tags: gather
+
+    # TC8 - gathered + deploy validation (must fail)
+    - name: GATHER - TC8 - GATHER - Gather with deploy enabled (invalid)
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+        deploy: true
+      register: result
+      ignore_errors: true
+      tags: gather
+
+    - name: GATHER - TC8 - ASSERT - Verify gathered+deploy validation
+      ansible.builtin.assert:
+        that:
+          - result.failed == true
+          - result.msg is search("Deploy parameter cannot be used")
+      tags: gather
+
+    # TC9 - gathered + dry_run validation (must fail)
+    - name: GATHER - TC9 - GATHER - Gather with dry_run enabled (invalid)
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+        dry_run: true
+      register: result
+      ignore_errors: true
+      tags: gather
+
+    - name: GATHER - TC9 - ASSERT - Verify gathered+dry_run validation
+      ansible.builtin.assert:
+        that:
+          - result.failed == true
+          - result.msg is search("Dry_run parameter cannot be used")
+      tags: gather
+
+    # TC10 - Validate /vpcPairs list API alignment with module gathered output
+    - name: GATHER - TC10 - LIST - Query vPC pairs list endpoint directly
+      cisco.nd.nd_rest:
+        path: "/api/v1/manage/fabrics/{{ test_fabric }}/vpcPairs"
+        method: get
+      register: vpc_pairs_list_result
+      tags: gather
+
+    - name: GATHER - TC10 - GATHER - Query module gathered output for comparison
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+      register: gathered_result
+      tags: gather
+
+    - name: GATHER - TC10 - ASSERT - Verify list and gathered payload availability
+      ansible.builtin.assert:
+        that:
+          - vpc_pairs_list_result.failed == false
+          - vpc_pairs_list_result.current.vpcPairs is defined
+          - vpc_pairs_list_result.current.vpcPairs is sequence
+          - gathered_result.failed == false
+          - gathered_result.gathered.vpc_pairs is defined
+      tags: gather
+
+    - name: GATHER - TC10 - ASSERT - Ensure each /vpcPairs entry appears in gathered output
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              (
+                gathered_result.gathered.vpc_pairs
+                | selectattr('switch_id', 'equalto', item.switchId)
+                | selectattr('peer_switch_id', 'equalto', item.peerSwitchId)
+                | list
+                | length
+              ) > 0
+            ) or
+            (
+              (
+                gathered_result.gathered.vpc_pairs
+                | selectattr('switch_id', 'equalto', item.peerSwitchId)
+                | selectattr('peer_switch_id', 'equalto', item.switchId)
+                | list
+                | length
+              ) > 0
+            )
+      loop: "{{ vpc_pairs_list_result.current.vpcPairs | default([]) }}"
+      tags: gather
+
+    # TC11 - Validate normalized pair matching for reversed switch order
+    - name: GATHER - TC11 - GATHER - Gather with reversed/duplicate pair filters
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+          - peer1_switch_id: "{{ test_switch2 }}"
+            peer2_switch_id: "{{ test_switch1 }}"
+      register: result
+      tags: gather
+
+    - name: GATHER - TC11 - ASSERT - Verify one pair returned for reversed filters
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+          - '(result.gathered.vpc_pairs | length) == 1'
+      tags: gather
+
     ##############################################
     ##                 CLEAN-UP                 ##
     ##############################################

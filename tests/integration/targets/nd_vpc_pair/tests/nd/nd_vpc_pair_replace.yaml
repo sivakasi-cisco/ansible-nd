@@ -116,7 +116,7 @@
         that:
           - verify_result.failed == false
           - '(verify_result.gathered.vpc_pairs | length) == 1'
-          - verify_result.gathered.vpc_pairs[0].useVirtualPeerLink == false
+          - verify_result.gathered.vpc_pairs[0].use_virtual_peer_link == false
       when: test_fabric_type == "LANClassic"
       tags: replace
 

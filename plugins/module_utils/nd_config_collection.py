@@ -212,6 +212,21 @@ class NDConfigCollection(Generic[ModelType]):
 
     # Collection Serialization
 
+    def to_list(self, **kwargs) -> List[Dict[str, Any]]:
+        """
+        # Summary
+
+        Export collection as a list of dictionaries using each item's
+        ``to_config()`` method.  This is the canonical serialization
+        used by ``NDNetworkResourceModule.add_logs_and_outputs()``
+        for ``current``, ``previous``, and ``proposed`` result keys.
+
+        ## Raises
+
+        None
+        """
+        return [item.to_config(**kwargs) for item in self._items]
+
     def to_ansible_config(self, **kwargs) -> List[Dict]:
         """
         Export as an Ansible config.

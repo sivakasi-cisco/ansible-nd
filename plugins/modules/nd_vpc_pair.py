@@ -16,9 +16,9 @@ short_description: Manage vPC pairs in Nexus devices.
 version_added: "1.0.0"
 description:
 - Create, update, delete, override, and gather vPC pairs on Nexus devices.
-- Uses NDNetworkResourceModule framework with custom action functions.
+- Uses NDStateMachine framework with a vPC orchestrator.
 - Integrates RestSend for battle-tested HTTP handling with retry logic.
-- Overcomes VPC pair API limitations via actions_overwrite_map.
+- Handles VPC API quirks via custom orchestrator action handlers.
 options:
     state:
         choices:
@@ -91,7 +91,7 @@ options:
                 type: bool
                 default: true
 notes:
-    - This module uses NDNetworkResourceModule framework for state management
+    - This module uses NDStateMachine framework for state management
     - RestSend provides protocol-based HTTP abstraction with automatic retry logic
     - Results are aggregated using the Results class for consistent output format
     - Check mode is fully supported via both framework and RestSend
@@ -276,11 +276,23 @@ from typing import Any, Dict, List, Optional, Union
 
 from ansible.module_utils.basic import AnsibleModule, missing_required_lib
 
-# Framework imports
-from ansible_collections.cisco.nd.plugins.module_utils.nd_network_resources import (
-    NDNetworkResourceModule,
+# Service layer imports
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_resources import (
+    VpcPairResourceService,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDNestedModel
+
+# Static imports so Ansible's AnsiballZ packager includes these files in the
+# module zip. nd_state_machine.py uses bare (aliased) imports that the AST
+# scanner cannot follow, so we import them explicitly here.
+from ansible_collections.cisco.nd.plugins.module_utils import nd_config_collection as _nd_config_collection  # noqa: F401
+from ansible_collections.cisco.nd.plugins.module_utils import utils as _nd_utils  # noqa: F401
+
+try:
+    # pre-PR172 layout
+    from ansible_collections.cisco.nd.plugins.module_utils.models.base import NDNestedModel
+except Exception:
+    # PR172 layout
+    from ansible_collections.cisco.nd.plugins.module_utils.models.nested import NDNestedModel
 
 # Enum imports
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
@@ -289,7 +301,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
     VpcActionEnum,
     VpcFieldNames,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_endpoints import (
+from ansible_collections.cisco.nd.plugins.module_utils.ep.v1 import (
     EpVpcPairConsistencyGet,
     EpVpcPairGet,
     EpVpcPairPut,
@@ -297,8 +309,8 @@ from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_
     EpVpcPairRecommendationGet,
     EpVpcPairSupportGet,
     EpVpcPairsListGet,
+    VpcPairBasePath,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
 
 # RestSend imports 
 from ansible_collections.cisco.nd.plugins.module_utils.nd_v2 import (
@@ -324,6 +336,21 @@ try:
 except ImportError:
     HAS_DEEPDIFF = False
     DEEPDIFF_IMPORT_ERROR = traceback.format_exc()
+
+
+def _collection_to_list_flex(collection) -> List[Dict[str, Any]]:
+    """
+    Serialize NDConfigCollection across old/new framework variants.
+    """
+    if collection is None:
+        return []
+    if hasattr(collection, "to_list"):
+        return collection.to_list()
+    if hasattr(collection, "to_payload_list"):
+        return collection.to_payload_list()
+    if hasattr(collection, "to_ansible_config"):
+        return collection.to_ansible_config()
+    return []
 
 
 # ===== API Endpoints =====
@@ -1029,6 +1056,57 @@ def _get_pairing_support_details(
     return None
 
 
+def _validate_fabric_peering_support(
+    nrm,
+    nd_v2,
+    fabric_name: str,
+    switch_id: str,
+    peer_switch_id: str,
+    use_virtual_peer_link: bool,
+) -> None:
+    """
+    Validate fabric peering support when virtual peer link is requested.
+
+    If API explicitly reports unsupported fabric peering, logs warning and
+    continues. If support API is unavailable, logs warning and continues.
+    """
+    if not use_virtual_peer_link:
+        return
+
+    switches_to_check = [switch_id, peer_switch_id]
+    for support_switch_id in switches_to_check:
+        if not support_switch_id:
+            continue
+
+        try:
+            support_details = _get_pairing_support_details(
+                nd_v2,
+                fabric_name=fabric_name,
+                switch_id=support_switch_id,
+                component_type=ComponentTypeSupportEnum.CHECK_FABRIC_PEERING_SUPPORT.value,
+            )
+            if not support_details:
+                continue
+
+            is_supported = _get_api_field_value(
+                support_details, "isVpcFabricPeeringSupported", None
+            )
+            if is_supported is False:
+                status = _get_api_field_value(
+                    support_details, "status", "Fabric peering not supported"
+                )
+                nrm.module.warn(
+                    f"VPC fabric peering is not supported for switch {support_switch_id}: {status}. "
+                    f"Continuing, but config save/deploy may report a platform limitation. "
+                    f"Consider setting use_virtual_peer_link=false for this platform."
+                )
+        except Exception as support_error:
+            nrm.module.warn(
+                f"Fabric peering support check failed for switch {support_switch_id}: "
+                f"{str(support_error).splitlines()[0]}. Continuing with create/update operation."
+            )
+
+
 def _get_consistency_details(
     nd_v2,
     fabric_name: str,
@@ -1059,6 +1137,47 @@ def _get_consistency_details(
     if isinstance(consistency_details, dict):
         return consistency_details
     return None
+
+
+def _is_switch_in_vpc_pair(
+    nd_v2,
+    fabric_name: str,
+    switch_id: str,
+    timeout: Optional[int] = None,
+) -> Optional[bool]:
+    """
+    Best-effort active-membership check via vPC overview endpoint.
+
+    Returns:
+      - True: overview query succeeded (switch is part of a vPC pair)
+      - False: API explicitly reports switch is not in a vPC pair
+      - None: unknown/error (do not block caller logic)
+    """
+    if not fabric_name or not switch_id:
+        return None
+
+    path = VpcPairEndpoints.switch_vpc_overview(
+        fabric_name, switch_id, component_type="full"
+    )
+
+    if timeout is None:
+        timeout = nd_v2.module.params.get("query_timeout", 10)
+
+    rest_send = nd_v2._get_rest_send()
+    rest_send.save_settings()
+    rest_send.timeout = timeout
+    try:
+        nd_v2.request(path, HttpVerbEnum.GET)
+        return True
+    except NDModuleError as error:
+        error_msg = (error.msg or "").lower()
+        if error.status == 400 and "not a part of vpc pair" in error_msg:
+            return False
+        return None
+    except Exception:
+        return None
+    finally:
+        rest_send.restore_settings()
 
 
 def _validate_fabric_switches(nd_v2, fabric_name: str) -> Dict[str, Dict]:
@@ -1210,6 +1329,81 @@ def _validate_switch_conflicts(want_configs: List[Dict], have_vpc_pairs: List[Di
         )
 
 
+def _validate_switches_exist_in_fabric(
+    nrm,
+    fabric_name: str,
+    switch_id: str,
+    peer_switch_id: str,
+) -> None:
+    """
+    Validate both switches exist in discovered fabric inventory.
+
+    This check is mandatory for create/update. Empty inventory is treated as
+    a validation error to avoid bypassing guardrails and failing later with a
+    less actionable API error.
+    """
+    fabric_switches = nrm.module.params.get("_fabric_switches")
+
+    if fabric_switches is None:
+        nrm.module.fail_json(
+            msg=(
+                f"Switch validation failed for fabric '{fabric_name}': switch inventory "
+                "was not loaded from query_all. Unable to validate requested vPC pair."
+            ),
+            vpc_pair_key=nrm.current_identifier,
+            fabric=fabric_name,
+        )
+
+    valid_switches = sorted(list(fabric_switches))
+    if not valid_switches:
+        nrm.module.fail_json(
+            msg=(
+                f"Switch validation failed for fabric '{fabric_name}': no switches were "
+                "discovered in fabric inventory. Cannot create/update vPC pairs without "
+                "validated switch membership."
+            ),
+            vpc_pair_key=nrm.current_identifier,
+            fabric=fabric_name,
+            total_valid_switches=0,
+        )
+
+    missing_switches = []
+    if switch_id not in fabric_switches:
+        missing_switches.append(switch_id)
+    if peer_switch_id not in fabric_switches:
+        missing_switches.append(peer_switch_id)
+
+    if not missing_switches:
+        return
+
+    max_switches_in_error = 10
+    error_msg = (
+        f"Switch validation failed: The following switch(es) do not exist in fabric '{fabric_name}':\n"
+        f"  Missing switches: {', '.join(missing_switches)}\n"
+        f"  Affected vPC pair: {nrm.current_identifier}\n\n"
+        "Please ensure:\n"
+        "  1. Switch serial numbers are correct (not IP addresses)\n"
+        "  2. Switches are discovered and present in the fabric\n"
+        "  3. You have the correct fabric name specified\n\n"
+    )
+
+    if len(valid_switches) <= max_switches_in_error:
+        error_msg += f"Valid switches in fabric: {', '.join(valid_switches)}"
+    else:
+        error_msg += (
+            f"Valid switches in fabric (first {max_switches_in_error}): "
+            f"{', '.join(valid_switches[:max_switches_in_error])} ... and "
+            f"{len(valid_switches) - max_switches_in_error} more"
+        )
+
+    nrm.module.fail_json(
+        msg=error_msg,
+        missing_switches=missing_switches,
+        vpc_pair_key=nrm.current_identifier,
+        total_valid_switches=len(valid_switches),
+    )
+
+
 def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pair_key: str, module) -> None:
     """
     Validate VPC pair can be safely deleted by checking for dependencies.
@@ -1236,7 +1430,14 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
         # Query overview endpoint with full component data
         overview_path = VpcPairEndpoints.switch_vpc_overview(fabric_name, switch_id, component_type="full")
 
-        response = nd_v2.request(overview_path, HttpVerbEnum.GET)
+        # Bound overview validation call by query_timeout for deterministic behavior.
+        rest_send = nd_v2._get_rest_send()
+        rest_send.save_settings()
+        rest_send.timeout = nd_v2.module.params.get("query_timeout", 10)
+        try:
+            response = nd_v2.request(overview_path, HttpVerbEnum.GET)
+        finally:
+            rest_send.restore_settings()
 
         # If no response, VPC pair doesn't exist - deletion not needed
         if not response:
@@ -1364,6 +1565,19 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
             )
 
     except NDModuleError as error:
+        error_msg = str(error.msg).lower() if error.msg else ""
+        status_code = error.status or 0
+
+        # If the overview query returns 400 with "not a part of" it means
+        # the pair no longer exists on the controller.  Signal the caller
+        # by raising a ValueError with a sentinel message so that the
+        # delete function can treat this as an idempotent no-op.
+        if status_code == 400 and "not a part of" in error_msg:
+            raise ValueError(
+                f"VPC pair {vpc_pair_key} is already unpaired on the controller. "
+                f"No deletion required."
+            )
+
         # Best effort validation - if overview query fails, log warning and proceed
         # The API will still reject deletion if dependencies exist
         module.warn(
@@ -1379,7 +1593,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
         )
 
 
-# ===== Custom Action Functions (using RestSend + actions_overwrite_map) =====
+# ===== Custom Action Functions (used by VpcPairResourceService via orchestrator) =====
 
 
 def custom_vpc_query_all(nrm) -> List[Dict]:
@@ -1394,7 +1608,7 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
     - Stores fabric switches for validation
 
     Args:
-        nrm: NDNetworkResourceModule instance
+        nrm: NDStateMachine instance
 
     Returns:
         List of VPC pair dictionaries from API (have state)
@@ -1463,8 +1677,15 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         pending_delete = []
         processed_switches = set()
 
-        # Build set of switch IDs from user config to limit recommendation queries
-        config = nrm.module.params.get("config") or []
+        # Build set of switch IDs from user config to limit recommendation queries.
+        # For gathered state, main() stores filters in _gather_filter_config and clears
+        # config before framework initialization to guarantee read-only behavior.
+        state = nrm.module.params.get("state", "merged")
+        if state == "gathered":
+            config = nrm.module.params.get("_gather_filter_config") or []
+        else:
+            config = nrm.module.params.get("config") or []
+        desired_pairs = {}
         config_switch_ids = set()
         for item in config:
             # Note: config items have been normalized to snake_case (switch_id, peer_switch_id)
@@ -1476,6 +1697,9 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 config_switch_ids.add(switch_id_val)
             if peer_switch_id_val:
                 config_switch_ids.add(peer_switch_id_val)
+
+            if switch_id_val and peer_switch_id_val:
+                desired_pairs[tuple(sorted([switch_id_val, peer_switch_id_val]))] = item
 
         for switch_id, switch in fabric_switches.items():
             if switch_id in processed_switches:
@@ -1489,44 +1713,84 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 processed_switches.add(switch_id)
                 processed_switches.add(peer_switch_id)
 
-                # Try recommendation API for useVirtualPeerLink status
+                # For configured pairs, prefer direct vPC query as the source of truth.
+                # Recommendation payloads can be stale for useVirtualPeerLink.
                 try:
-                    recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
-                except Exception as rec_error:
-                    error_msg = str(rec_error).splitlines()[0]
-                    nrm.module.warn(
-                        f"Recommendation query failed for switch {switch_id}: {error_msg}. "
-                        f"Falling back to direct vPC pair query."
-                    )
-                    recommendation = None
-
-                if recommendation:
-                    # VPC pair is fully configured
-                    use_vpl = _get_api_field_value(recommendation, "useVirtualPeerLink", False)
-                    have.append({
-                        VpcFieldNames.SWITCH_ID: switch_id,
-                        VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
-                        VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
-                    })
-                else:
-                    # Recommendation failed - query VPC pair directly
+                    vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
+                    rest_send = nd_v2._get_rest_send()
+                    rest_send.save_settings()
+                    rest_send.timeout = 5
                     try:
-                        vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
-                        rest_send = nd_v2._get_rest_send()
-                        rest_send.save_settings()
-                        rest_send.timeout = 5
-                        try:
-                            direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
-                        finally:
-                            rest_send.restore_settings()
-                    except (NDModuleError, Exception):
-                        direct_vpc = None
+                        direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
+                    finally:
+                        rest_send.restore_settings()
+                except (NDModuleError, Exception):
+                    direct_vpc = None
 
-                    if direct_vpc:
-                        use_vpl = direct_vpc.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, False)
+                if direct_vpc:
+                    resolved_peer_switch_id = direct_vpc.get(VpcFieldNames.PEER_SWITCH_ID) or peer_switch_id
+                    if resolved_peer_switch_id:
+                        processed_switches.add(resolved_peer_switch_id)
+                    use_vpl = _get_api_field_value(direct_vpc, "useVirtualPeerLink", False)
+
+                    # Direct /vpcPair can be stale for a short period after delete.
+                    # Cross-check overview to avoid reporting stale active pairs.
+                    membership = _is_switch_in_vpc_pair(
+                        nd_v2, fabric_name, switch_id, timeout=5
+                    )
+                    if membership is False:
+                        pair_key = None
+                        if resolved_peer_switch_id:
+                            pair_key = tuple(sorted([switch_id, resolved_peer_switch_id]))
+                        desired_item = desired_pairs.get(pair_key) if pair_key else None
+                        desired_use_vpl = None
+                        if desired_item:
+                            desired_use_vpl = desired_item.get("use_virtual_peer_link")
+                            if desired_use_vpl is None:
+                                desired_use_vpl = desired_item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK)
+
+                        # Narrow override: only trust direct payload for write states when
+                        # it matches desired pair intent. This preserves idempotence without
+                        # masking true post-delete stale data during gathered/deleted flows.
+                        if state in ("merged", "replaced", "overridden") and desired_item is not None:
+                            if desired_use_vpl is None or bool(desired_use_vpl) == bool(use_vpl):
+                                nrm.module.warn(
+                                    f"Overview membership check returned 'not paired' for switch {switch_id}, "
+                                    "but direct /vpcPair matched requested config. Treating pair as active."
+                                )
+                                membership = True
+                    if membership is False:
+                        pending_delete.append({
+                            VpcFieldNames.SWITCH_ID: switch_id,
+                            VpcFieldNames.PEER_SWITCH_ID: resolved_peer_switch_id,
+                            VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
+                        })
+                    else:
                         have.append({
                             VpcFieldNames.SWITCH_ID: switch_id,
-                            VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                            VpcFieldNames.PEER_SWITCH_ID: resolved_peer_switch_id,
+                            VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
+                        })
+                else:
+                    # Direct query failed - fall back to recommendation.
+                    try:
+                        recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
+                    except Exception as rec_error:
+                        error_msg = str(rec_error).splitlines()[0]
+                        nrm.module.warn(
+                            f"Recommendation query failed for switch {switch_id}: {error_msg}. "
+                            f"Unable to read configured vPC pair details."
+                        )
+                        recommendation = None
+
+                    if recommendation:
+                        resolved_peer_switch_id = _get_api_field_value(recommendation, "serialNumber") or peer_switch_id
+                        if resolved_peer_switch_id:
+                            processed_switches.add(resolved_peer_switch_id)
+                        use_vpl = _get_api_field_value(recommendation, "useVirtualPeerLink", False)
+                        have.append({
+                            VpcFieldNames.SWITCH_ID: switch_id,
+                            VpcFieldNames.PEER_SWITCH_ID: resolved_peer_switch_id,
                             VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                         })
                     else:
@@ -1537,53 +1801,78 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                             VpcFieldNames.USE_VIRTUAL_PEER_LINK: False,
                         })
             elif not config_switch_ids or switch_id in config_switch_ids:
-                # Check recommendations for:
-                # - All switches if no config provided (gathered state)
-                # - Only switches in user's config if config provided
+                # For unconfigured switches, prefer direct vPC pair query first.
+                # Recommendation endpoints can lag and may return stale useVirtualPeerLink.
                 try:
-                    recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
-                except Exception as rec_error:
-                    error_msg = str(rec_error).splitlines()[0]
-                    nrm.module.warn(
-                        f"Recommendation query failed for switch {switch_id}: {error_msg}. "
-                        f"Falling back to direct vPC pair query."
-                    )
-                    recommendation = None
+                    vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
+                    rest_send = nd_v2._get_rest_send()
+                    rest_send.save_settings()
+                    rest_send.timeout = 5
+                    try:
+                        direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
+                    finally:
+                        rest_send.restore_settings()
+                except (NDModuleError, Exception):
+                    direct_vpc = None
 
-                if recommendation:
-                    peer_switch_id = _get_api_field_value(recommendation, "serialNumber")
+                if direct_vpc:
+                    peer_switch_id = direct_vpc.get(VpcFieldNames.PEER_SWITCH_ID)
                     if peer_switch_id:
                         processed_switches.add(switch_id)
                         processed_switches.add(peer_switch_id)
 
-                        use_vpl = _get_api_field_value(recommendation, "useVirtualPeerLink", False)
-                        pending_create.append({
-                            VpcFieldNames.SWITCH_ID: switch_id,
-                            VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
-                            VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
-                        })
-                else:
-                    # Recommendation failed - try direct VPC query to detect staged (not deployed) pairs
-                    try:
-                        vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
-                        rest_send = nd_v2._get_rest_send()
-                        rest_send.save_settings()
-                        rest_send.timeout = 5
-                        try:
-                            direct_vpc = nd_v2.request(vpc_pair_path, HttpVerbEnum.GET)
-                        finally:
-                            rest_send.restore_settings()
-                    except (NDModuleError, Exception):
-                        direct_vpc = None
+                        use_vpl = _get_api_field_value(direct_vpc, "useVirtualPeerLink", False)
+                        membership = _is_switch_in_vpc_pair(
+                            nd_v2, fabric_name, switch_id, timeout=5
+                        )
+                        if membership is False:
+                            pair_key = tuple(sorted([switch_id, peer_switch_id]))
+                            desired_item = desired_pairs.get(pair_key)
+                            desired_use_vpl = None
+                            if desired_item:
+                                desired_use_vpl = desired_item.get("use_virtual_peer_link")
+                                if desired_use_vpl is None:
+                                    desired_use_vpl = desired_item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK)
 
-                    if direct_vpc:
-                        peer_switch_id = direct_vpc.get(VpcFieldNames.PEER_SWITCH_ID)
+                            if state in ("merged", "replaced", "overridden") and desired_item is not None:
+                                if desired_use_vpl is None or bool(desired_use_vpl) == bool(use_vpl):
+                                    nrm.module.warn(
+                                        f"Overview membership check returned 'not paired' for switch {switch_id}, "
+                                        "but direct /vpcPair matched requested config. Treating pair as active."
+                                    )
+                                    membership = True
+                        if membership is False:
+                            pending_delete.append({
+                                VpcFieldNames.SWITCH_ID: switch_id,
+                                VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                                VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
+                            })
+                        else:
+                            have.append({
+                                VpcFieldNames.SWITCH_ID: switch_id,
+                                VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+                                VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
+                            })
+                else:
+                    # No direct pair; check recommendation for pending create candidates.
+                    try:
+                        recommendation = _get_recommendation_details(nd_v2, fabric_name, switch_id)
+                    except Exception as rec_error:
+                        error_msg = str(rec_error).splitlines()[0]
+                        nrm.module.warn(
+                            f"Recommendation query failed for switch {switch_id}: {error_msg}. "
+                            f"No recommendation details available."
+                        )
+                        recommendation = None
+
+                    if recommendation:
+                        peer_switch_id = _get_api_field_value(recommendation, "serialNumber")
                         if peer_switch_id:
                             processed_switches.add(switch_id)
                             processed_switches.add(peer_switch_id)
 
-                            use_vpl = direct_vpc.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, False)
-                            have.append({
+                            use_vpl = _get_api_field_value(recommendation, "useVirtualPeerLink", False)
+                            pending_create.append({
                                 VpcFieldNames.SWITCH_ID: switch_id,
                                 VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
                                 VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
@@ -1594,19 +1883,28 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         nrm.module.params["_pending_create"] = pending_create
         nrm.module.params["_pending_delete"] = pending_delete
 
-        # Treat pending pairs as existing to make merged state idempotent
-        existing_pairs = []
-        seen_keys = set()
-        for pair in have + pending_create + pending_delete:
+        # Build effective existing set for state reconciliation:
+        # - Include active pairs (have) and pending-create pairs.
+        # - Exclude pending-delete pairs from active set to avoid stale
+        #   idempotence false-negatives right after unpair operations.
+        pair_by_key = {}
+        for pair in pending_create + have:
             switch_id = pair.get(VpcFieldNames.SWITCH_ID)
             peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID)
             if not switch_id or not peer_switch_id:
                 continue
             key = tuple(sorted([switch_id, peer_switch_id]))
-            if key in seen_keys:
+            pair_by_key[key] = pair
+
+        for pair in pending_delete:
+            switch_id = pair.get(VpcFieldNames.SWITCH_ID)
+            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID)
+            if not switch_id or not peer_switch_id:
                 continue
-            seen_keys.add(key)
-            existing_pairs.append(pair)
+            key = tuple(sorted([switch_id, peer_switch_id]))
+            pair_by_key.pop(key, None)
+
+        existing_pairs = list(pair_by_key.values())
 
         # Note: Memory optimization already applied at line 1219-1220
         # fabric_switches dict was converted to set immediately after query
@@ -1641,7 +1939,7 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
     - Results aggregation
 
     Args:
-        nrm: NDNetworkResourceModule instance
+        nrm: NDStateMachine instance
 
     Returns:
         API response dictionary or None
@@ -1665,41 +1963,13 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
     if not peer_switch_id:
         raise ValueError("peer_switch_id is required but was not provided")
 
-    # Validation Step 1: Check switches exist in fabric (from Common.validate_switches_exist)
-    fabric_switches = nrm.module.params.get("_fabric_switches", set())
-    if fabric_switches:
-        missing_switches = []
-        if switch_id not in fabric_switches:
-            missing_switches.append(switch_id)
-        if peer_switch_id not in fabric_switches:
-            missing_switches.append(peer_switch_id)
-
-        if missing_switches:
-            # fabric_switches is now a set, so convert to sorted list
-            valid_switches = sorted(list(fabric_switches))
-            MAX_SWITCHES_IN_ERROR = 10
-            error_msg = (
-                f"Switch validation failed: The following switch(es) do not exist in fabric '{fabric_name}':\n"
-                f"  Missing switches: {', '.join(missing_switches)}\n"
-                f"  Affected vPC pair: {nrm.current_identifier}\n\n"
-                f"Please ensure:\n"
-                f"  1. Switch serial numbers are correct (not IP addresses)\n"
-                f"  2. Switches are discovered and present in the fabric\n"
-                f"  3. You have the correct fabric name specified\n\n"
-            )
-
-            # Include limited valid switches list for reference
-            if len(valid_switches) <= MAX_SWITCHES_IN_ERROR:
-                error_msg += f"Valid switches in fabric: {', '.join(valid_switches)}"
-            else:
-                error_msg += f"Valid switches in fabric (first {MAX_SWITCHES_IN_ERROR}): {', '.join(valid_switches[:MAX_SWITCHES_IN_ERROR])} ... and {len(valid_switches) - MAX_SWITCHES_IN_ERROR} more"
-
-            nrm.module.fail_json(
-                msg=error_msg,
-                missing_switches=missing_switches,
-                vpc_pair_key=nrm.current_identifier,
-                total_valid_switches=len(valid_switches)
-            )
+    # Validation Step 1: both switches must exist in discovered fabric inventory.
+    _validate_switches_exist_in_fabric(
+        nrm=nrm,
+        fabric_name=fabric_name,
+        switch_id=switch_id,
+        peer_switch_id=peer_switch_id,
+    )
     
     # Validation Step 2: Check for switch conflicts (from Common.validate_no_switch_conflicts)
     have_vpc_pairs = nrm.module.params.get("_have", [])
@@ -1720,6 +1990,7 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
 
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
+    use_virtual_peer_link = nrm.proposed_config.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True)
 
     # Validate pairing support using dedicated endpoint.
     # Only fail when API explicitly states pairing is not allowed.
@@ -1750,6 +2021,16 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
             f"Pairing support check failed for switch {switch_id}: "
             f"{str(support_error).splitlines()[0]}. Continuing with create operation."
         )
+
+    # Validate fabric peering support if virtual peer link is requested.
+    _validate_fabric_peering_support(
+        nrm=nrm,
+        nd_v2=nd_v2,
+        fabric_name=fabric_name,
+        switch_id=switch_id,
+        peer_switch_id=peer_switch_id,
+        use_virtual_peer_link=use_virtual_peer_link,
+    )
 
     # Build path with switch ID using Manage API (not NDFC API)
     # The NDFC API (/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair) may not be available
@@ -1807,7 +2088,7 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
     - Proper error handling
 
     Args:
-        nrm: NDNetworkResourceModule instance
+        nrm: NDStateMachine instance
 
     Returns:
         API response dictionary or None
@@ -1830,41 +2111,13 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
     if not peer_switch_id:
         raise ValueError("peer_switch_id is required but was not provided")
 
-    # Validation Step 1: Check switches exist in fabric (from Common.validate_switches_exist)
-    fabric_switches = nrm.module.params.get("_fabric_switches", set())
-    if fabric_switches:
-        missing_switches = []
-        if switch_id not in fabric_switches:
-            missing_switches.append(switch_id)
-        if peer_switch_id not in fabric_switches:
-            missing_switches.append(peer_switch_id)
-
-        if missing_switches:
-            # fabric_switches is now a set, so convert to sorted list
-            valid_switches = sorted(list(fabric_switches))
-            MAX_SWITCHES_IN_ERROR = 10
-            error_msg = (
-                f"Switch validation failed: The following switch(es) do not exist in fabric '{fabric_name}':\n"
-                f"  Missing switches: {', '.join(missing_switches)}\n"
-                f"  Affected vPC pair: {nrm.current_identifier}\n\n"
-                f"Please ensure:\n"
-                f"  1. Switch serial numbers are correct (not IP addresses)\n"
-                f"  2. Switches are discovered and present in the fabric\n"
-                f"  3. You have the correct fabric name specified\n\n"
-            )
-
-            # Include limited valid switches list for reference
-            if len(valid_switches) <= MAX_SWITCHES_IN_ERROR:
-                error_msg += f"Valid switches in fabric: {', '.join(valid_switches)}"
-            else:
-                error_msg += f"Valid switches in fabric (first {MAX_SWITCHES_IN_ERROR}): {', '.join(valid_switches[:MAX_SWITCHES_IN_ERROR])} ... and {len(valid_switches) - MAX_SWITCHES_IN_ERROR} more"
-
-            nrm.module.fail_json(
-                msg=error_msg,
-                missing_switches=missing_switches,
-                vpc_pair_key=nrm.current_identifier,
-                total_valid_switches=len(valid_switches)
-            )
+    # Validation Step 1: both switches must exist in discovered fabric inventory.
+    _validate_switches_exist_in_fabric(
+        nrm=nrm,
+        fabric_name=fabric_name,
+        switch_id=switch_id,
+        peer_switch_id=peer_switch_id,
+    )
     
     # Validation Step 2: Check for switch conflicts (from Common.validate_no_switch_conflicts)
     have_vpc_pairs = nrm.module.params.get("_have", [])
@@ -1891,6 +2144,17 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
 
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
+    use_virtual_peer_link = nrm.proposed_config.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True)
+
+    # Validate fabric peering support if virtual peer link is requested.
+    _validate_fabric_peering_support(
+        nrm=nrm,
+        nd_v2=nd_v2,
+        fabric_name=fabric_name,
+        switch_id=switch_id,
+        peer_switch_id=peer_switch_id,
+        use_virtual_peer_link=use_virtual_peer_link,
+    )
 
     # Build path with switch ID using Manage API (not NDFC API)
     # The NDFC API (/appcenter/cisco/ndfc/api/v1/lan-fabric/rest/vpcpair) may not be available
@@ -1945,7 +2209,7 @@ def custom_vpc_delete(nrm) -> None:
     - Proper error handling with NDModuleError
 
     Args:
-        nrm: NDNetworkResourceModule instance
+        nrm: NDStateMachine instance
 
     Raises:
         ValueError: If fabric_name or switch_id is not provided
@@ -1987,6 +2251,12 @@ def custom_vpc_delete(nrm) -> None:
                 f"The 'force: true' parameter was not necessary in this case. "
                 f"Consider removing 'force: true' to benefit from safety checks in future runs."
             )
+
+    except ValueError as already_unpaired:
+        # Sentinel from _validate_vpc_pair_deletion: pair no longer exists.
+        # Treat as idempotent success — nothing to delete.
+        nrm.module.warn(str(already_unpaired))
+        return
 
     except (NDModuleError, Exception) as validation_error:
         # Validation failed - check if force deletion is enabled
@@ -2031,9 +2301,27 @@ def custom_vpc_delete(nrm) -> None:
 
     try:
         # Use PUT (not DELETE!) for unpair via RestSend
-        nd_v2.request(path, HttpVerbEnum.PUT, payload)
+        rest_send = nd_v2._get_rest_send()
+        rest_send.save_settings()
+        rest_send.timeout = nrm.module.params.get("api_timeout", 30)
+        try:
+            nd_v2.request(path, HttpVerbEnum.PUT, payload)
+        finally:
+            rest_send.restore_settings()
 
     except NDModuleError as error:
+        error_msg = str(error.msg).lower() if error.msg else ""
+        status_code = error.status or 0
+
+        # Idempotent handling: if the API says the switch is not part of any
+        # vPC pair, the pair is already gone — treat as a successful no-op.
+        if status_code == 400 and "not a part of" in error_msg:
+            nrm.module.warn(
+                f"VPC pair {nrm.current_identifier} is already unpaired on the controller. "
+                f"Treating as idempotent success. API response: {error.msg}"
+            )
+            return
+
         error_dict = error.to_dict()
         # Preserve original API error message with different key to avoid conflict
         if 'msg' in error_dict:
@@ -2066,7 +2354,7 @@ def _needs_deployment(result: Dict, nrm) -> bool:
     
     Args:
         result: Module result dictionary with diff info
-        nrm: NDNetworkResourceModule instance
+        nrm: NDStateMachine instance
         
     Returns:
         True if deployment is needed, False otherwise
@@ -2089,6 +2377,26 @@ def _needs_deployment(result: Dict, nrm) -> bool:
     return needs_deploy
 
 
+def _is_non_fatal_config_save_error(error: NDModuleError) -> bool:
+    """
+    Return True only for known non-fatal configSave platform limitations.
+    """
+    if not isinstance(error, NDModuleError):
+        return False
+
+    # Keep this allowlist tight to avoid masking real config-save failures.
+    if error.status != 500:
+        return False
+
+    message = (error.msg or "").lower()
+    non_fatal_signatures = (
+        "vpc fabric peering is not supported",
+        "vpcsanitycheck",
+        "unexpected error generating vpc configuration",
+    )
+    return any(signature in message for signature in non_fatal_signatures)
+
+
 def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
     """
     Custom deploy function for fabric configuration changes using RestSend.
@@ -2101,7 +2409,7 @@ def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
     - Only deploys if there are actual changes or pending operations
 
     Args:
-        nrm: NDNetworkResourceModule instance
+        nrm: NDStateMachine instance
         fabric_name: Fabric name to deploy
         result: Module result dictionary to check for changes
 
@@ -2167,18 +2475,32 @@ def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
         results.register_task_result()
 
     except NDModuleError as error:
-        # Log warning but continue to deploy
-        nrm.module.warn(f"Config save failed: {error.msg}")
+        if _is_non_fatal_config_save_error(error):
+            # Known platform limitation warning; continue to deploy step.
+            nrm.module.warn(f"Config save failed: {error.msg}")
 
-        results.response_current = {
-            "RETURN_CODE": error.status if error.status else -1,
-            "MESSAGE": error.msg,
-            "REQUEST_PATH": save_path,
-            "METHOD": "POST",
-            "DATA": {},
-        }
-        results.result_current = {"success": False, "changed": False}
-        results.register_task_result()
+            results.response_current = {
+                "RETURN_CODE": error.status if error.status else -1,
+                "MESSAGE": error.msg,
+                "REQUEST_PATH": save_path,
+                "METHOD": "POST",
+                "DATA": {},
+            }
+            results.result_current = {"success": True, "changed": False}
+            results.register_task_result()
+        else:
+            # Unknown config-save failures are fatal.
+            results.response_current = {
+                "RETURN_CODE": error.status if error.status else -1,
+                "MESSAGE": error.msg,
+                "REQUEST_PATH": save_path,
+                "METHOD": "POST",
+                "DATA": {},
+            }
+            results.result_current = {"success": False, "changed": False}
+            results.register_task_result()
+            results.build_final_result()
+            nrm.module.fail_json(msg=f"Config save failed: {error.msg}", **results.final_result)
 
     # Step 2: Deploy
     deploy_path = VpcPairEndpoints.fabric_config_deploy(fabric_name, force_show_run=True)
@@ -2227,35 +2549,69 @@ def run_vpc_module(nrm) -> Dict[str, Any]:
 
     if state == "gathered":
         nrm.add_logs_and_outputs()
+        nrm.result["changed"] = False
+
+        current_pairs = nrm.result.get("current", []) or []
+        pending_delete = nrm.module.params.get("_pending_delete", []) or []
+
+        # Exclude pairs in pending-delete from active gathered set.
+        pending_delete_keys = set()
+        for pair in pending_delete:
+            switch_id = pair.get(VpcFieldNames.SWITCH_ID) or pair.get("switch_id")
+            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID) or pair.get("peer_switch_id")
+            if switch_id and peer_switch_id:
+                pending_delete_keys.add(tuple(sorted([switch_id, peer_switch_id])))
+
+        filtered_current = []
+        for pair in current_pairs:
+            switch_id = pair.get(VpcFieldNames.SWITCH_ID) or pair.get("switch_id")
+            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID) or pair.get("peer_switch_id")
+            if switch_id and peer_switch_id:
+                pair_key = tuple(sorted([switch_id, peer_switch_id]))
+                if pair_key in pending_delete_keys:
+                    continue
+            filtered_current.append(pair)
+
+        nrm.result["current"] = filtered_current
         nrm.result["gathered"] = {
-            "vpc_pairs": nrm.result.get("current", []),
+            "vpc_pairs": filtered_current,
             "pending_create_vpc_pairs": nrm.module.params.get("_pending_create", []),
-            "pending_delete_vpc_pairs": nrm.module.params.get("_pending_delete", []),
+            "pending_delete_vpc_pairs": pending_delete,
         }
         return nrm.result
 
     # state=deleted with empty config means "delete all existing pairs in this fabric".
-    if state == "deleted" and not config:
-        # Use the live existing collection from NDNetworkResourceModule.
+    #
+    # state=overridden with empty config has the same user intent (TC4):
+    # remove all existing pairs from this fabric.
+    if state in ("deleted", "overridden") and not config:
+        # Use the live existing collection from NDStateMachine.
         # nrm.result["current"] is only populated after add_logs_and_outputs(), so relying on
         # it here would incorrectly produce an empty delete list.
-        existing_pairs = nrm.existing.to_list() if hasattr(nrm, "existing") else []
+        existing_pairs = _collection_to_list_flex(getattr(nrm, "existing", None))
         if not existing_pairs:
             existing_pairs = nrm.result.get("current", []) or []
 
         delete_all_config = []
         for pair in existing_pairs:
-            switch_id = pair.get(VpcFieldNames.SWITCH_ID)
-            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID)
+            switch_id = pair.get(VpcFieldNames.SWITCH_ID) or pair.get("switch_id")
+            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID) or pair.get("peer_switch_id")
             if switch_id and peer_switch_id:
+                use_vpl = pair.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK)
+                if use_vpl is None:
+                    use_vpl = pair.get("use_virtual_peer_link", True)
                 delete_all_config.append(
                     {
                         "switch_id": switch_id,
                         "peer_switch_id": peer_switch_id,
-                        "use_virtual_peer_link": pair.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True),
+                        "use_virtual_peer_link": use_vpl,
                     }
                 )
         config = delete_all_config
+        # Force explicit delete operations instead of relying on overridden-state
+        # reconciliation behavior with empty desired config.
+        if state == "overridden":
+            state = "deleted"
 
     nrm.manage_state(state=state, new_configs=config)
     nrm.add_logs_and_outputs()
@@ -2270,9 +2626,9 @@ def main():
     Module entry point combining framework + RestSend.
 
     Architecture:
-    - NDNetworkResourceModule framework handles state management
+    - Thin module entrypoint delegates to VpcPairResourceService
+    - VpcPairResourceService handles NDStateMachine orchestration
     - Custom actions use RestSend (NDModuleV2) for HTTP with retry logic
-    - actions_overwrite_map provides the integration glue
     """
     argument_spec = dict(
         state=dict(
@@ -2361,55 +2717,34 @@ def main():
 
     module.params["config"] = normalized_config
 
-    # ============================================================
-    # ACTIONS OVERWRITE MAP - Integration of Framework + RestSend
-    # ============================================================
-    # This is where we override default framework behaviors to:
-    # 1. Use RestSend (NDModuleV2) for HTTP with retry logic
-    # 2. Handle non-RESTful API (PUT for create/delete)
-    # 3. Add discriminator pattern (vpcAction field)
+    # Gather must remain strictly read-only. Preserve user-provided config as a
+    # query filter, but clear the framework desired config to avoid unintended
+    # reconciliation before run_vpc_module() handles gathered output.
+    if state == "gathered":
+        module.params["_gather_filter_config"] = list(normalized_config)
+        module.params["config"] = []
+    else:
+        module.params["_gather_filter_config"] = []
 
-    actions_overwrite_map = {
-        "query_all": custom_vpc_query_all,  # RestSend query with IP-to-SN mapping
-        "create": custom_vpc_create,        # RestSend PUT with vpcAction="pair"
-        "update": custom_vpc_update,        # RestSend PUT with vpcAction="pair"
-        "delete": custom_vpc_delete,        # RestSend PUT with vpcAction="unpair"
+    # VpcPairResourceService bridges NDStateMachine lifecycle hooks to RestSend actions.
+    fabric_name = module.params.get("fabric_name")
+    actions = {
+        "query_all": custom_vpc_query_all,
+        "create": custom_vpc_create,
+        "update": custom_vpc_update,
+        "delete": custom_vpc_delete,
     }
 
-    # Build base path (framework will use custom functions to modify it)
-    fabric_name = module.params.get("fabric_name")
-    base_path = VpcPairEndpoints.vpc_pair_base(fabric_name)
-
     try:
-        # Create NDNetworkResourceModule instance with custom actions
-        nd_vpc_pair = NDNetworkResourceModule(
+        service = VpcPairResourceService(
             module=module,
-            path=base_path,
             model_class=VpcPairModel,
-            actions_overwrite_map=actions_overwrite_map,  # ← Magic happens here!
+            actions=actions,
+            run_state_handler=run_vpc_module,
+            deploy_handler=custom_vpc_deploy,
+            needs_deployment_handler=_needs_deployment,
         )
-
-        # Run VPC state machine (keeps vPC-specific gathered output local to this module)
-        result = run_vpc_module(nd_vpc_pair)
-
-        # Add IP-to-SN mapping if available
-        if "_ip_to_sn_mapping" in module.params:
-            result["ip_to_sn_mapping"] = module.params["_ip_to_sn_mapping"]
-
-        # Handle deployment if requested
-        deploy = module.params.get("deploy", False)
-        if deploy and result.get("changed") and not module.check_mode:
-            # Pass result to smart deployment function
-            deploy_result = custom_vpc_deploy(nd_vpc_pair, fabric_name, result)
-
-            # Merge deployment results
-            result["deployment"] = deploy_result
-            if deploy_result.get("failed"):
-                result["failed"] = True
-                result["changed"] = True  # Still changed even if deploy failed
-            
-            # Add deployment_needed flag for visibility
-            result["deployment_needed"] = deploy_result.get("deployment_needed", True)
+        result = service.execute(fabric_name=fabric_name)
 
         module.exit_json(**result)
 

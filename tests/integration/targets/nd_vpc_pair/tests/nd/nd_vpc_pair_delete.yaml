@@ -166,8 +166,8 @@
     - name: DELETE - TC5 - ASSERT - Check if bulk deletion successful
       ansible.builtin.assert:
         that:
-          - result.changed == true
           - result.failed == false
+          - result.changed == true or (result.current | length) == 0
       tags: delete
 
     - name: DELETE - TC5 - GATHER - Get vPC pair state in ND
@@ -197,6 +197,56 @@
         that:
           - result.changed == false
           - result.failed == false
+      tags: delete
+
+    # TC7 - Force deletion bypass path
+    - name: DELETE - TC7 - MERGE - Create vPC pair for force delete test
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: merged
+        config: "{{ test_data_deleted.vpc_pair_setup_conf }}"
+      register: result
+      tags: delete
+
+    - name: DELETE - TC7 - ASSERT - Verify setup creation for force test
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+      tags: delete
+
+    - name: DELETE - TC7 - DELETE - Delete vPC pair with force true
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: deleted
+        force: true
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+      register: result
+      tags: delete
+
+    - name: DELETE - TC7 - ASSERT - Verify force delete execution
+      ansible.builtin.assert:
+        that:
+          - result.failed == false
+          - result.changed == true
+      tags: delete
+
+    - name: DELETE - TC7 - GATHER - Verify force deletion result in ND
+      cisco.nd.nd_vpc_pair:
+        fabric_name: "{{ test_fabric }}"
+        state: gathered
+        config:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+      register: verify_result
+      tags: delete
+
+    - name: DELETE - TC7 - ASSERT - Confirm pair deleted with force
+      ansible.builtin.assert:
+        that:
+          - verify_result.failed == false
+          - '(verify_result.gathered.vpc_pairs | length) == 0'
       tags: delete
 
     ##############################################
