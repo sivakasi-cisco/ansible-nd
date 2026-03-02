@@ -37,6 +37,20 @@ def register_nd_state_machine_import_aliases() -> None:
     sys.modules.setdefault("constants", constants_module)
     sys.modules.setdefault("nd_config_collection", nd_config_collection_module)
 
+    # Keep compatibility scoped to vpc_pair runtime: NDStateMachine expects
+    # NDConfigCollection.to_list(), while PR172 exposes to_ansible_config().
+    nd_config_collection_cls = getattr(
+        nd_config_collection_module, "NDConfigCollection", None
+    )
+    if (
+        nd_config_collection_cls is not None
+        and not hasattr(nd_config_collection_cls, "to_list")
+    ):
+        def _to_list(self, **kwargs):
+            return self.to_ansible_config(**kwargs)
+
+        setattr(nd_config_collection_cls, "to_list", _to_list)
+
     models_pkg = sys.modules.get("models")
     if models_pkg is None:
         models_pkg = py_types.ModuleType("models")

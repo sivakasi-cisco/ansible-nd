@@ -691,6 +691,12 @@ class VpcPairModel(NDNestedModel):
         """
         return self.model_dump(by_alias=True, exclude_none=True)
 
+    def to_config(self, **kwargs) -> Dict[str, Any]:
+        """
+        Convert to Ansible config shape with snake_case field names.
+        """
+        return self.model_dump(by_alias=False, exclude_none=True, **kwargs)
+
     @classmethod
     def from_response(cls, response: Dict[str, Any]) -> "VpcPairModel":
         """

@@ -77,9 +77,7 @@ class NDBaseModel(BaseModel, ABC):
         """
         Convert model to Ansible config format.
         """
-        # by_alias=False uses Python field names (not camelCase aliases).
-        # NOTE: by_name=True is the modern equivalent but requires Pydantic >= 2.13.
-        return self.model_dump(by_alias=False, exclude_none=True, **kwargs)
+        return self.model_dump(by_name=True, exclude_none=True, **kwargs)
 
     @classmethod
     def from_response(cls, response: Dict[str, Any], **kwargs) -> Self:
