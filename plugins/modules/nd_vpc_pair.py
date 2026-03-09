@@ -308,7 +308,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
     VpcActionEnum,
     VpcFieldNames,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.ep.v1 import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair import (
     EpVpcPairConsistencyGet,
     EpVpcPairGet,
     EpVpcPairPut,
