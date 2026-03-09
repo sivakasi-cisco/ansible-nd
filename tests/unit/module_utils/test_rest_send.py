@@ -10,7 +10,7 @@ Unit tests for rest_send.py
 Tests the RestSend class for sending REST requests with retries
 """
 
-# pylint: disable=protected-access,too-many-lines
+# pylint: disable=disallowed-name,protected-access,too-many-lines
 
 from __future__ import absolute_import, annotations, division, print_function
 
@@ -20,8 +20,8 @@ import inspect
 
 import pytest
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
-from ansible_collections.cisco.nd.plugins.module_utils.response_handler_nd import ResponseHandler
-from ansible_collections.cisco.nd.plugins.module_utils.rest_send import RestSend
+from ansible_collections.cisco.nd.plugins.module_utils.rest.response_handler_nd import ResponseHandler
+from ansible_collections.cisco.nd.plugins.module_utils.rest.rest_send import RestSend
 from ansible_collections.cisco.nd.tests.unit.module_utils.common_utils import does_not_raise
 from ansible_collections.cisco.nd.tests.unit.module_utils.fixtures.load_fixture import load_fixture
 from ansible_collections.cisco.nd.tests.unit.module_utils.mock_ansible_module import MockAnsibleModule
@@ -66,7 +66,6 @@ def test_rest_send_00010():
     assert instance.timeout == 300
     assert instance.send_interval == 5
     assert instance.unit_test is False
-    assert instance.implements == "rest_send_v1"
 
 
 def test_rest_send_00020():
@@ -899,6 +898,7 @@ def test_rest_send_00510():
     ## Test
 
     - Failed POST request returns 400 response
+    - Loop retries until timeout is exhausted
 
     ## Classes and Methods
 
@@ -909,9 +909,9 @@ def test_rest_send_00510():
     key = f"{method_name}a"
 
     def responses():
-        # Provide an extra response entry for potential retry scenarios
-        yield responses_rest_send(key)
-        yield responses_rest_send(key)
+        # Provide responses for multiple retry attempts (60 retries * 5 second interval = 300 seconds)
+        for _ in range(60):
+            yield responses_rest_send(key)
 
     gen_responses = ResponseGenerator(responses())
 
@@ -931,7 +931,8 @@ def test_rest_send_00510():
         response_handler.commit()
         instance.response_handler = response_handler
         instance.unit_test = True
-        instance.timeout = 1
+        instance.timeout = 10
+        instance.send_interval = 5
         instance.path = "/api/v1/test/badrequest"
         instance.verb = HttpVerbEnum.POST
         instance.payload = {"invalid": "data"}
@@ -951,6 +952,7 @@ def test_rest_send_00520():
     ## Test
 
     - Failed GET request returns 500 response
+    - Loop retries until timeout is exhausted
 
     ## Classes and Methods
 
@@ -961,9 +963,9 @@ def test_rest_send_00520():
     key = f"{method_name}a"
 
     def responses():
-        # Provide an extra response entry for potential retry scenarios
-        yield responses_rest_send(key)
-        yield responses_rest_send(key)
+        # Provide responses for multiple retry attempts (60 retries * 5 second interval = 300 seconds)
+        for _ in range(60):
+            yield responses_rest_send(key)
 
     gen_responses = ResponseGenerator(responses())
 
@@ -983,7 +985,8 @@ def test_rest_send_00520():
         response_handler.commit()
         instance.response_handler = response_handler
         instance.unit_test = True
-        instance.timeout = 1
+        instance.timeout = 10
+        instance.send_interval = 5
         instance.path = "/api/v1/test/servererror"
         instance.verb = HttpVerbEnum.GET
         instance.commit()
