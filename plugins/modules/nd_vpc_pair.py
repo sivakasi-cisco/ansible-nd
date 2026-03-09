@@ -279,6 +279,7 @@ from ansible.module_utils.basic import AnsibleModule, missing_required_lib
 # Service layer imports
 from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_resources import (
     VpcPairResourceService,
+    VpcPairResourceError,
 )
 
 # Static imports so Ansible's AnsiballZ packager includes these files in the
@@ -316,6 +317,10 @@ from ansible_collections.cisco.nd.plugins.module_utils.ep.v1 import (
     EpVpcPairSupportGet,
     EpVpcPairsListGet,
     VpcPairBasePath,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.query_params import (
+    CompositeQueryParams,
+    EndpointQueryParams,
 )
 
 # RestSend imports 
@@ -362,7 +367,24 @@ def _collection_to_list_flex(collection) -> List[Dict[str, Any]]:
     return []
 
 
+def _raise_vpc_error(msg: str, **details: Any) -> None:
+    """Raise a structured vpc_pair error for main() to format via fail_json."""
+    raise VpcPairResourceError(msg=msg, **details)
+
+
 # ===== API Endpoints =====
+
+
+class _ComponentTypeQueryParams(EndpointQueryParams):
+    """Query params for endpoints that require componentType."""
+
+    component_type: Optional[str] = None
+
+
+class _ForceShowRunQueryParams(EndpointQueryParams):
+    """Query params for deploy endpoint."""
+
+    force_show_run: Optional[bool] = None
 
 
 class VpcPairEndpoints:
@@ -398,6 +420,15 @@ class VpcPairEndpoints:
     SWITCH_VPC_PAIR = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/switches/{{switch_id}}/vpcPair"
     SWITCH_VPC_RECOMMENDATIONS = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/switches/{{switch_id}}/vpcPairRecommendations"
     SWITCH_VPC_OVERVIEW = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/switches/{{switch_id}}/vpcPairOverview"
+
+    @staticmethod
+    def _append_query(path: str, *query_groups: EndpointQueryParams) -> str:
+        """Compose query params using shared query param utilities."""
+        composite_params = CompositeQueryParams()
+        for query_group in query_groups:
+            composite_params.add(query_group)
+        query_string = composite_params.to_query_string(url_encode=False)
+        return f"{path}?{query_string}" if query_string else path
 
     @staticmethod
     def vpc_pair_base(fabric_name: str) -> str:
@@ -524,7 +555,8 @@ class VpcPairEndpoints:
         """
         endpoint = EpVpcPairOverviewGet(fabric_name=fabric_name, switch_id=switch_id)
         base_path = endpoint.path
-        return f"{base_path}?componentType={component_type}"
+        query_params = _ComponentTypeQueryParams(component_type=component_type)
+        return VpcPairEndpoints._append_query(base_path, query_params)
 
     @staticmethod
     def switch_vpc_support(
@@ -549,7 +581,8 @@ class VpcPairEndpoints:
             component_type=component_type,
         )
         base_path = endpoint.path
-        return f"{base_path}?componentType={component_type}"
+        query_params = _ComponentTypeQueryParams(component_type=component_type)
+        return VpcPairEndpoints._append_query(base_path, query_params)
 
     @staticmethod
     def switch_vpc_consistency(fabric_name: str, switch_id: str) -> str:
@@ -600,9 +633,10 @@ class VpcPairEndpoints:
             '/api/v1/manage/fabrics/myFabric/actions/deploy?forceShowRun=true'
         """
         base_path = VpcPairBasePath.fabrics(fabric_name, "actions", "deploy")
-        if force_show_run:
-            return f"{base_path}?forceShowRun=true"
-        return base_path
+        query_params = _ForceShowRunQueryParams(
+            force_show_run=True if force_show_run else None
+        )
+        return VpcPairEndpoints._append_query(base_path, query_params)
 
 
 # ===== VPC Pair Model =====
@@ -1338,7 +1372,7 @@ def _validate_switch_conflicts(want_configs: List[Dict], have_vpc_pairs: List[Di
                 )
 
     if conflicts:
-        module.fail_json(
+        _raise_vpc_error(
             msg="Switch conflicts detected. A switch can only be part of one VPC pair at a time.",
             conflicts=conflicts
         )
@@ -1360,7 +1394,7 @@ def _validate_switches_exist_in_fabric(
     fabric_switches = nrm.module.params.get("_fabric_switches")
 
     if fabric_switches is None:
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=(
                 f"Switch validation failed for fabric '{fabric_name}': switch inventory "
                 "was not loaded from query_all. Unable to validate requested vPC pair."
@@ -1371,7 +1405,7 @@ def _validate_switches_exist_in_fabric(
 
     valid_switches = sorted(list(fabric_switches))
     if not valid_switches:
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=(
                 f"Switch validation failed for fabric '{fabric_name}': no switches were "
                 "discovered in fabric inventory. Cannot create/update vPC pairs without "
@@ -1411,7 +1445,7 @@ def _validate_switches_exist_in_fabric(
             f"{len(valid_switches) - max_switches_in_error} more"
         )
 
-    nrm.module.fail_json(
+    _raise_vpc_error(
         msg=error_msg,
         missing_switches=missing_switches,
         vpc_pair_key=nrm.current_identifier,
@@ -1483,7 +1517,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
 
         # Validate response structure
         if not isinstance(response, dict):
-            module.fail_json(
+            _raise_vpc_error(
                 msg=f"Expected dict response from vPC pair overview for {vpc_pair_key}, got {type(response).__name__}",
                 response=response
             )
@@ -1491,7 +1525,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
         # Validate overlay data exists
         overlay = response.get(VpcFieldNames.OVERLAY)
         if not overlay:
-            module.fail_json(
+            _raise_vpc_error(
                 msg=(
                     f"vPC pair {vpc_pair_key} might not exist or overlay data unavailable. "
                     f"Cannot safely validate deletion."
@@ -1507,7 +1541,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
                 try:
                     count_int = int(count)
                     if count_int != 0:
-                        module.fail_json(
+                        _raise_vpc_error(
                             msg=(
                                 f"Cannot delete vPC pair {vpc_pair_key}. "
                                 f"{count_int} network(s) with status '{status}' still exist. "
@@ -1535,7 +1569,7 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
                 try:
                     count_int = int(count)
                     if count_int != 0:
-                        module.fail_json(
+                        _raise_vpc_error(
                             msg=(
                                 f"Cannot delete vPC pair {vpc_pair_key}. "
                                 f"{count_int} VRF(s) with status '{status}' still exist. "
@@ -1579,6 +1613,8 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
                 f"Proceeding with deletion, but it may fail if vPC interfaces exist."
             )
 
+    except VpcPairResourceError:
+        raise
     except NDModuleError as error:
         error_msg = str(error.msg).lower() if error.msg else ""
         status_code = error.status or 0
@@ -1930,13 +1966,15 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         # Preserve original API error message with different key to avoid conflict
         if 'msg' in error_dict:
             error_dict['api_error_msg'] = error_dict.pop('msg')
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to query VPC pairs: {error.msg}",
             fabric=fabric_name,
             **error_dict
         )
+    except VpcPairResourceError:
+        raise
     except Exception as e:
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to query VPC pairs: {str(e)}",
             fabric=fabric_name,
             exception_type=type(e).__name__
@@ -2024,13 +2062,15 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
                 reason = _get_api_field_value(
                     support_details, "reason", "pairing blocked by support checks"
                 )
-                nrm.module.fail_json(
+                _raise_vpc_error(
                     msg=f"VPC pairing is not allowed for switch {switch_id}: {reason}",
                     fabric=fabric_name,
                     switch_id=switch_id,
                     peer_switch_id=peer_switch_id,
                     support_details=support_details,
                 )
+    except VpcPairResourceError:
+        raise
     except Exception as support_error:
         nrm.module.warn(
             f"Pairing support check failed for switch {switch_id}: "
@@ -2073,7 +2113,7 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
         # Preserve original API error message with different key to avoid conflict
         if 'msg' in error_dict:
             error_dict['api_error_msg'] = error_dict.pop('msg')
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to create VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
             switch_id=switch_id,
@@ -2081,8 +2121,10 @@ def custom_vpc_create(nrm) -> Optional[Dict[str, Any]]:
             path=path,
             **error_dict
         )
+    except VpcPairResourceError:
+        raise
     except Exception as e:
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to create VPC pair {nrm.current_identifier}: {str(e)}",
             fabric=fabric_name,
             switch_id=switch_id,
@@ -2197,15 +2239,17 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
         # Preserve original API error message with different key to avoid conflict
         if 'msg' in error_dict:
             error_dict['api_error_msg'] = error_dict.pop('msg')
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to update VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
             switch_id=switch_id,
             path=path,
             **error_dict
         )
+    except VpcPairResourceError:
+        raise
     except Exception as e:
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to update VPC pair {nrm.current_identifier}: {str(e)}",
             fabric=fabric_name,
             switch_id=switch_id,
@@ -2276,7 +2320,7 @@ def custom_vpc_delete(nrm) -> None:
     except (NDModuleError, Exception) as validation_error:
         # Validation failed - check if force deletion is enabled
         if not force_delete:
-            nrm.module.fail_json(
+            _raise_vpc_error(
                 msg=(
                     f"Pre-deletion validation failed for VPC pair {vpc_pair_key}. "
                     f"Error: {str(validation_error)}. "
@@ -2341,15 +2385,17 @@ def custom_vpc_delete(nrm) -> None:
         # Preserve original API error message with different key to avoid conflict
         if 'msg' in error_dict:
             error_dict['api_error_msg'] = error_dict.pop('msg')
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to delete VPC pair {nrm.current_identifier}: {error.msg}",
             fabric=fabric_name,
             switch_id=switch_id,
             path=path,
             **error_dict
         )
+    except VpcPairResourceError:
+        raise
     except Exception as e:
-        nrm.module.fail_json(
+        _raise_vpc_error(
             msg=f"Failed to delete VPC pair {nrm.current_identifier}: {str(e)}",
             fabric=fabric_name,
             switch_id=switch_id,
@@ -2515,7 +2561,9 @@ def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
             results.result_current = {"success": False, "changed": False}
             results.register_task_result()
             results.build_final_result()
-            nrm.module.fail_json(msg=f"Config save failed: {error.msg}", **results.final_result)
+            final_result = dict(results.final_result)
+            final_msg = final_result.pop("msg", f"Config save failed: {error.msg}")
+            _raise_vpc_error(msg=final_msg, **final_result)
 
     # Step 2: Deploy
     deploy_path = VpcPairEndpoints.fabric_config_deploy(fabric_name, force_show_run=True)
@@ -2546,7 +2594,9 @@ def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
 
         # Build final result and fail
         results.build_final_result()
-        nrm.module.fail_json(**results.final_result)
+        final_result = dict(results.final_result)
+        final_msg = final_result.pop("msg", "Fabric deployment failed")
+        _raise_vpc_error(msg=final_msg, **final_result)
 
     # Build final result
     results.build_final_result()
@@ -2770,6 +2820,8 @@ def main():
 
         module.exit_json(**result)
 
+    except VpcPairResourceError as e:
+        module.fail_json(msg=e.msg, **e.details)
     except Exception as e:
         module.fail_json(msg=str(e))
 

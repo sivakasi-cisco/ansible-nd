@@ -12,7 +12,7 @@ managing VPC pairs in Nexus Dashboard.
 
 Components:
 - enums: Enumeration types for constrained values
-- endpoint_mixins: Reusable field mixins for composition
+- mixins: Reusable field mixins for composition
 - base_paths: Centralized API path builders
 - vpc_pair_endpoints: Endpoint models for each API operation
 - vpc_pair_schemas: Request/response data schemas

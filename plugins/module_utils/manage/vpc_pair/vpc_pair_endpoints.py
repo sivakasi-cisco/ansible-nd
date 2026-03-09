@@ -26,7 +26,7 @@ __author__ = "Sivakami Sivaraman"
 from typing import TYPE_CHECKING, Literal, Optional
 
 from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.endpoint_mixins import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.mixins import (
     ComponentTypeMixin,
     FabricNameMixin,
     FilterMixin,
@@ -106,6 +106,8 @@ class EpVpcPairGet(_EpVpcPairBase):
     ```
     """
 
+    api_version: Literal["v1"] = Field(default="v1", description="ND API version for this endpoint")
+    min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairGet"] = Field(default="EpVpcPairGet", description="Class name for backward compatibility")
 
     @property
@@ -146,6 +148,8 @@ class EpVpcPairPut(_EpVpcPairBase, TicketIdMixin):
     ```
     """
 
+    api_version: Literal["v1"] = Field(default="v1", description="ND API version for this endpoint")
+    min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairPut"] = Field(default="EpVpcPairPut", description="Class name for backward compatibility")
 
     @property
@@ -196,6 +200,8 @@ class EpVpcPairSupportGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Comp
     """
 
     model_config = COMMON_CONFIG
+    api_version: Literal["v1"] = Field(default="v1", description="ND API version for this endpoint")
+    min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairSupportGet"] = Field(default="EpVpcPairSupportGet", description="Class name for backward compatibility")
 
     @property
@@ -253,6 +259,8 @@ class EpVpcPairOverviewGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Com
     """
 
     model_config = COMMON_CONFIG
+    api_version: Literal["v1"] = Field(default="v1", description="ND API version for this endpoint")
+    min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairOverviewGet"] = Field(default="EpVpcPairOverviewGet", description="Class name for backward compatibility")
 
     @property
@@ -309,6 +317,8 @@ class EpVpcPairRecommendationGet(FabricNameMixin, SwitchIdMixin, FromClusterMixi
     """
 
     model_config = COMMON_CONFIG
+    api_version: Literal["v1"] = Field(default="v1", description="ND API version for this endpoint")
+    min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairRecommendationGet"] = Field(default="EpVpcPairRecommendationGet", description="Class name for backward compatibility")
 
     use_virtual_peer_link: Optional[bool] = Field(default=None, description="Virtual peer link available")
@@ -362,6 +372,8 @@ class EpVpcPairConsistencyGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, 
     """
 
     model_config = COMMON_CONFIG
+    api_version: Literal["v1"] = Field(default="v1", description="ND API version for this endpoint")
+    min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairConsistencyGet"] = Field(default="EpVpcPairConsistencyGet", description="Class name for backward compatibility")
 
     @property
@@ -426,6 +438,8 @@ class EpVpcPairsListGet(FabricNameMixin, FromClusterMixin, FilterMixin, Paginati
     """
 
     model_config = COMMON_CONFIG
+    api_version: Literal["v1"] = Field(default="v1", description="ND API version for this endpoint")
+    min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairsListGet"] = Field(default="EpVpcPairsListGet", description="Class name for backward compatibility")
 
     @property

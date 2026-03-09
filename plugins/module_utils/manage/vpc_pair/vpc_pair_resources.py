@@ -110,6 +110,15 @@ DeployHandler = Callable[[Any, str, Dict[str, Any]], Dict[str, Any]]
 NeedsDeployHandler = Callable[[Dict[str, Any], Any], bool]
 
 
+class VpcPairResourceError(Exception):
+    """Structured error raised by vpc_pair runtime layers."""
+
+    def __init__(self, msg: str, **details: Any):
+        super().__init__(msg)
+        self.msg = msg
+        self.details = details
+
+
 class _VpcPairQueryContext:
     """Minimal context object for query_all during NDStateMachine initialization."""
 
@@ -198,18 +207,18 @@ class VpcPairStateMachine(NDStateMachine):
                 try:
                     parsed_items.append(self.model_class.model_validate(config))
                 except ValidationError as e:
-                    self.fail_json(
+                    raise VpcPairResourceError(
                         msg=f"Invalid configuration: {e}",
                         config=config,
                         validation_errors=e.errors(),
                     )
-                    return
 
             self.proposed = self.nd_config_collection(model_class=self.model_class, items=parsed_items)
             self.previous = self.existing.copy()
         except Exception as e:
-            self.fail_json(msg=f"Failed to prepare configurations: {e}", error=str(e))
-            return
+            if isinstance(e, VpcPairResourceError):
+                raise
+            raise VpcPairResourceError(msg=f"Failed to prepare configurations: {e}", error=str(e))
 
         if state in ["merged", "replaced", "overridden"]:
             self._manage_create_update_state(state, unwanted_keys)
@@ -218,7 +227,7 @@ class VpcPairStateMachine(NDStateMachine):
         elif state == "deleted":
             self._manage_delete_state()
         else:
-            self.fail_json(msg=f"Invalid state: {state}")
+            raise VpcPairResourceError(msg=f"Invalid state: {state}")
 
     def _manage_create_update_state(self, state: str, unwanted_keys: List) -> None:
         for proposed_item in self.proposed:
@@ -290,8 +299,11 @@ class VpcPairStateMachine(NDStateMachine):
                     after_data=self.existing_config,
                 )
                 if not self.module.params.get("ignore_errors", False):
-                    self.fail_json(msg=error_msg, identifier=str(identifier), error=str(e))
-                    return
+                    raise VpcPairResourceError(
+                        msg=error_msg,
+                        identifier=str(identifier),
+                        error=str(e),
+                    )
 
     def _manage_override_deletions(self, override_exceptions: List) -> None:
         diff_identifiers = self.previous.get_diff_identifiers(self.proposed)
@@ -313,8 +325,11 @@ class VpcPairStateMachine(NDStateMachine):
             except Exception as e:
                 error_msg = f"Failed to delete {identifier}: {e}"
                 if not self.module.params.get("ignore_errors", False):
-                    self.fail_json(msg=error_msg, identifier=str(identifier), error=str(e))
-                    return
+                    raise VpcPairResourceError(
+                        msg=error_msg,
+                        identifier=str(identifier),
+                        error=str(e),
+                    )
 
     def _manage_delete_state(self) -> None:
         for proposed_item in self.proposed:
@@ -335,8 +350,11 @@ class VpcPairStateMachine(NDStateMachine):
             except Exception as e:
                 error_msg = f"Failed to delete {identifier}: {e}"
                 if not self.module.params.get("ignore_errors", False):
-                    self.fail_json(msg=error_msg, identifier=str(identifier), error=str(e))
-                    return
+                    raise VpcPairResourceError(
+                        msg=error_msg,
+                        identifier=str(identifier),
+                        error=str(e),
+                    )
 
 
 class VpcPairResourceService:
