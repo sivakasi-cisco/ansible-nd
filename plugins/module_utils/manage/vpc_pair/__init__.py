@@ -102,6 +102,4 @@ try:
 except ImportError as e:
     # Pydantic not available - components will not be exposed
     # This allows the package to be imported without pydantic for basic functionality
-    import sys
-    print(f"Warning: Could not import VPC pair components: {e}", file=sys.stderr)
-    pass
+    _ = e

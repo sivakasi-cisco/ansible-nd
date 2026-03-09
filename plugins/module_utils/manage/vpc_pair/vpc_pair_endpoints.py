@@ -38,7 +38,11 @@ from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.mixins im
     ViewMixin,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
-from ansible_collections.cisco.nd.plugins.module_utils.pydantic_compat import BaseModel, ConfigDict, Field
+from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
+    BaseModel,
+    ConfigDict,
+    Field,
+)
 
 # Common config for basic validation
 COMMON_CONFIG = ConfigDict(validate_assignment=True)

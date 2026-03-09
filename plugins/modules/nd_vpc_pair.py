@@ -272,7 +272,7 @@ import json
 import logging
 import sys
 import traceback
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Union
 
 from ansible.module_utils.basic import AnsibleModule, missing_required_lib
 
@@ -662,8 +662,8 @@ class VpcPairModel(NDNestedModel):
     """
 
     # Identifier configuration
-    identifiers = ["switch_id", "peer_switch_id"]
-    identifier_strategy = "composite"
+    identifiers: ClassVar[List[str]] = ["switch_id", "peer_switch_id"]
+    identifier_strategy: ClassVar[Literal["composite"]] = "composite"
 
     # Fields (Ansible names -> API aliases)
     switch_id: str = Field(

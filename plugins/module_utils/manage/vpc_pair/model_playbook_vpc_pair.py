@@ -21,9 +21,16 @@ organized into functional domains:
 """
 
 from abc import ABC, abstractmethod
-from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, field_validator, model_validator
 from typing import List, Dict, Any, Optional, Union, Tuple, ClassVar, Literal, Annotated
 from typing_extensions import Self
+from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # Import enums from centralized location
 from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import (

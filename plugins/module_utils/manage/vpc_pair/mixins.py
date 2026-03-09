@@ -18,25 +18,17 @@ This module provides mixin classes that can be composed to add common
 fields to endpoint models without duplication.
 """
 
-from __future__ import absolute_import, division, print_function
+from __future__ import absolute_import, annotations, division, print_function
 
 __metaclass__ = type
 __author__ = "Sivakami Sivaraman"
 
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
-if TYPE_CHECKING:
-    from pydantic import BaseModel, Field
-else:
-    try:
-        from pydantic import BaseModel, Field
-    except ImportError:
-        # Fallback for environments without pydantic
-        class BaseModel:
-            pass
-
-        def Field(*args, **kwargs):
-            return None
+from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
+    BaseModel,
+    Field,
+)
 
 
 class FabricNameMixin(BaseModel):
