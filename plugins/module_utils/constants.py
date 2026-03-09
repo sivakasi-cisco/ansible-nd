@@ -9,18 +9,6 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
-from typing import Dict
-from types import MappingProxyType
-from copy import deepcopy
-
-class NDConstantMapping(Dict):
-
-    def __init__(self, data: Dict):
-        new_dict = deepcopy(data)
-        for k,v in data.items():
-            new_dict[v] = k
-        return MappingProxyType(new_dict)
-
 OBJECT_TYPES = {
     "tenant": "OST_TENANT",
     "vrf": "OST_VRF",
@@ -169,11 +157,6 @@ ALLOWED_STATES_TO_APPEND_SENT_AND_PROPOSED = (
     "restart",
     "delete",
     "update",
-    "merged",
-    "replaced",
-    "overridden",
-    "deleted",
-    "gathered",
 )
 
 INTERFACE_FLOW_RULES_TYPES_MAPPING = {"port_channel": "PORTCHANNEL", "physical": "PHYSICAL", "l3out_sub_interface": "L3_SUBIF", "l3out_svi": "SVI"}
