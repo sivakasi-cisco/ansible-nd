@@ -1,3 +1,0 @@
-modules:
-  # Limit Python version to control node Python versions
-  python_requires: controller
