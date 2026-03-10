@@ -135,8 +135,26 @@ class VpcPairOrchestrator:
 
     model_class = None
 
-    def __init__(self, module: AnsibleModule):
+    def __init__(
+        self,
+        module: Optional[AnsibleModule] = None,
+        sender: Optional[Any] = None,
+        **kwargs,
+    ):
+        _ = kwargs
+        # Compatibility with both NDStateMachine variants:
+        # - legacy: model_orchestrator(module=...)
+        # - Current: model_orchestrator(sender=nd_module)
+        if module is None and sender is not None:
+            module = getattr(sender, "module", None)
+        if module is None:
+            raise ValueError(
+                "VpcPairOrchestrator requires either module=AnsibleModule "
+                "or sender=<NDModule with .module>."
+            )
+
         self.module = module
+        self.sender = sender
         self.state_machine = None
 
         self.model_class = getattr(self.module, "_vpc_pair_model_class", None)
@@ -198,7 +216,10 @@ class VpcPairStateMachine(NDStateMachine):
         override_exceptions = override_exceptions or []
 
         self.state = state
-        self.params["state"] = state
+        if hasattr(self, "params") and isinstance(getattr(self, "params"), dict):
+            self.params["state"] = state
+        else:
+            self.module.params["state"] = state
         self.ansible_config = new_configs or []
 
         try:

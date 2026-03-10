@@ -18,7 +18,7 @@ Components:
 - vpc_pair_schemas: Request/response data schemas
 
 Usage:
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair import (
         EpVpcPairGet,
         EpVpcPairPut,
         VpcPairDetailsDefault,
@@ -65,7 +65,7 @@ __all__ = [
 
 # Try to import and expose components (graceful fallback if pydantic not available)
 try:
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_endpoints import (
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_endpoints import (
         EpVpcPairGet,
         EpVpcPairPut,
         EpVpcPairSupportGet,
@@ -74,7 +74,7 @@ try:
         EpVpcPairConsistencyGet,
         EpVpcPairsListGet,
     )
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.model_playbook_vpc_pair import (
+    from ansible_collections.cisco.nd.plugins.models.model_playbook_vpc_pair import (
         VpcPairDetailsDefault,
         VpcPairDetailsCustom,
         VpcPairingRequest,
@@ -83,7 +83,7 @@ try:
         VpcPairConsistency,
         VpcPairRecommendation,
     )
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import (
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
         VerbEnum,
         VpcActionEnum,
         VpcPairTypeEnum,
@@ -97,7 +97,9 @@ try:
         VpcPairViewEnum,
         VpcFieldNames,
     )
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.base_paths import (
+        VpcPairBasePath,
+    )
 
 except ImportError as e:
     # Pydantic not available - components will not be exposed

@@ -275,12 +275,19 @@ import traceback
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Union
 
 from ansible.module_utils.basic import AnsibleModule, missing_required_lib
+from ansible_collections.cisco.nd.plugins.module_utils.common.log import setup_logging
 
 # Service layer imports
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_resources import (
-    VpcPairResourceService,
-    VpcPairResourceError,
-)
+try:
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_resources import (
+        VpcPairResourceService,
+        VpcPairResourceError,
+    )
+except Exception:
+    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_resources import (
+        VpcPairResourceService,
+        VpcPairResourceError,
+    )
 
 # Static imports so Ansible's AnsiballZ packager includes these files in the
 # module zip. Keep them optional when framework files are intentionally absent.
@@ -303,21 +310,41 @@ except Exception:
 
 # Enum imports
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
-    ComponentTypeSupportEnum,
-    VpcActionEnum,
-    VpcFieldNames,
-)
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair import (
-    EpVpcPairConsistencyGet,
-    EpVpcPairGet,
-    EpVpcPairPut,
-    EpVpcPairOverviewGet,
-    EpVpcPairRecommendationGet,
-    EpVpcPairSupportGet,
-    EpVpcPairsListGet,
-    VpcPairBasePath,
-)
+try:
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
+        ComponentTypeSupportEnum,
+        VpcActionEnum,
+        VpcFieldNames,
+    )
+except Exception:
+    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
+        ComponentTypeSupportEnum,
+        VpcActionEnum,
+        VpcFieldNames,
+    )
+
+try:
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_endpoints import (
+        EpVpcPairConsistencyGet,
+        EpVpcPairGet,
+        EpVpcPairPut,
+        EpVpcPairOverviewGet,
+        EpVpcPairRecommendationGet,
+        EpVpcPairSupportGet,
+        EpVpcPairsListGet,
+        VpcPairBasePath,
+    )
+except Exception:
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair import (
+        EpVpcPairConsistencyGet,
+        EpVpcPairGet,
+        EpVpcPairPut,
+        EpVpcPairOverviewGet,
+        EpVpcPairRecommendationGet,
+        EpVpcPairSupportGet,
+        EpVpcPairsListGet,
+        VpcPairBasePath,
+    )
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.query_params import (
     CompositeQueryParams,
     EndpointQueryParams,
@@ -337,10 +364,16 @@ except Exception:
 from pydantic import Field, field_validator, model_validator
 
 # VPC Pair schema imports (for vpc_pair_details support)
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.model_playbook_vpc_pair import (
-    VpcPairDetailsDefault,
-    VpcPairDetailsCustom,
-)
+try:
+    from ansible_collections.cisco.nd.plugins.models.model_playbook_vpc_pair import (
+        VpcPairDetailsDefault,
+        VpcPairDetailsCustom,
+    )
+except Exception:
+    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_details import (
+        VpcPairDetailsDefault,
+        VpcPairDetailsCustom,
+    )
 
 # DeepDiff for intelligent change detection
 try:
@@ -733,6 +766,14 @@ class VpcPairModel(NDNestedModel):
         Note: vpcAction is added by custom functions, not here.
         """
         return self.model_dump(by_alias=True, exclude_none=True)
+
+    def get_identifier_value(self):
+        """
+        Return a stable composite identifier for VPC pair operations.
+
+        Sort switch IDs to treat (A,B) and (B,A) as the same logical pair.
+        """
+        return tuple(sorted([self.switch_id, self.peer_switch_id]))
 
     def to_config(self, **kwargs) -> Dict[str, Any]:
         """
@@ -1647,66 +1688,78 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
 # ===== Custom Action Functions (used by VpcPairResourceService via orchestrator) =====
 
 
+def _filter_vpc_pairs_by_requested_config(
+    pairs: List[Dict[str, Any]],
+    config: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Filter queried VPC pairs by explicit pair keys provided in gathered config.
+
+    If gathered config is empty or does not contain complete switch pairs, return
+    the unfiltered pair list.
+    """
+    if not pairs or not config:
+        return list(pairs or [])
+
+    requested_pair_keys = set()
+    for item in config:
+        switch_id = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
+        peer_switch_id = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
+        if switch_id and peer_switch_id:
+            requested_pair_keys.add(tuple(sorted([switch_id, peer_switch_id])))
+
+    if not requested_pair_keys:
+        return list(pairs)
+
+    filtered_pairs = []
+    for item in pairs:
+        switch_id = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
+        peer_switch_id = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
+        if switch_id and peer_switch_id:
+            pair_key = tuple(sorted([switch_id, peer_switch_id]))
+            if pair_key in requested_pair_keys:
+                filtered_pairs.append(item)
+
+    return filtered_pairs
+
+
 def custom_vpc_query_all(nrm) -> List[Dict]:
     """
-    Custom query function for VPC pairs using RestSend with full state tracking.
+    Query existing VPC pairs with state-aware enrichment.
 
-    - Validates fabric and queries switch inventory (UpdateInventory)
-    - Tracks 3-state: have, pending_create, pending_delete (GetHave)
-    - Queries recommendation API for virtual peer link details
-    - Falls back to direct VPC query if recommendation fails
-    - Builds IP-to-SN mapping from switch inventory
-    - Stores fabric switches for validation
-
-    Args:
-        nrm: NDStateMachine instance
-
-    Returns:
-        List of VPC pair dictionaries from API (have state)
-
-    Raises:
-        ValueError: If fabric_name is not configured
-        NDModuleError: If critical queries fail
+    Flow:
+    - Base query from /vpcPairs list (always attempted first)
+    - gathered/deleted: use lightweight list-only data when available
+    - merged/replaced/overridden: enrich with switch inventory and recommendation
+      APIs to build have/pending_create/pending_delete sets
     """
     fabric_name = nrm.module.params.get("fabric_name")
 
-    # Fabric validation (from UpdateInventory.__init__)
     if not fabric_name or not isinstance(fabric_name, str) or not fabric_name.strip():
         raise ValueError(f"fabric_name must be a non-empty string. Got: {fabric_name!r}")
+
+    state = nrm.module.params.get("state", "merged")
+    if state == "gathered":
+        config = nrm.module.params.get("_gather_filter_config") or []
+    else:
+        config = nrm.module.params.get("config") or []
 
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
 
+    def _set_lightweight_context(lightweight_have: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        nrm.module.params["_fabric_switches"] = []
+        nrm.module.params["_fabric_switches_count"] = 0
+        nrm.module.params["_ip_to_sn_mapping"] = {}
+        nrm.module.params["_have"] = lightweight_have
+        nrm.module.params["_pending_create"] = []
+        nrm.module.params["_pending_delete"] = []
+        return lightweight_have
+
     try:
-        # Step 1: Query and validate fabric switches (UpdateInventory.refresh())
-        fabric_switches = _validate_fabric_switches(nd_v2, fabric_name)
-
-        if not fabric_switches:
-            nrm.module.warn(f"No switches found in fabric {fabric_name}")
-            nrm.module.params["_fabric_switches"] = []  # Use list for JSON serialization
-            nrm.module.params["_fabric_switches_count"] = 0
-            nrm.module.params["_have"] = []
-            nrm.module.params["_pending_create"] = []
-            nrm.module.params["_pending_delete"] = []
-            return []
-
-        # Memory optimization: Convert to list immediately to avoid keeping full dict in memory
-        # Keep only switch IDs for validation (not full switch objects)
-        # Use list (not set) for JSON serialization compatibility
-        fabric_switches_list = list(fabric_switches.keys())
-        nrm.module.params["_fabric_switches"] = fabric_switches_list
-        nrm.module.params["_fabric_switches_count"] = len(fabric_switches)
-
-        # Build IP-to-SN mapping (extract before dict is discarded)
-        ip_to_sn = {
-            sw.get(VpcFieldNames.FABRIC_MGMT_IP): sw.get(VpcFieldNames.SERIAL_NUMBER)
-            for sw in fabric_switches.values()
-            if VpcFieldNames.FABRIC_MGMT_IP in sw
-        }
-        nrm.module.params["_ip_to_sn_mapping"] = ip_to_sn
-        
-        # Step 2: Seed existing VPC pairs from list endpoint (/vpcPairs)
+        # Step 1: Base query from list endpoint (/vpcPairs)
         have = []
+        list_query_succeeded = False
         try:
             list_path = VpcPairEndpoints.vpc_pairs_list(fabric_name)
             rest_send = nd_v2._get_rest_send()
@@ -1717,30 +1770,103 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
             finally:
                 rest_send.restore_settings()
             have.extend(_extract_vpc_pairs_from_list_response(vpc_pairs_response))
+            list_query_succeeded = True
         except Exception as list_error:
             nrm.module.warn(
                 f"VPC pairs list query failed for fabric {fabric_name}: "
-                f"{str(list_error).splitlines()[0]}. Continuing with switch-level queries."
+                f"{str(list_error).splitlines()[0]}."
             )
 
-        # Step 3: Track 3-state VPC pairs (GetHave.refresh())
+        # Lightweight path for read-only and delete workflows.
+        # Keep heavy discovery/enrichment only for write states.
+        if state in ("deleted", "gathered"):
+            if list_query_succeeded:
+                if state == "gathered":
+                    have = _filter_vpc_pairs_by_requested_config(have, config)
+                return _set_lightweight_context(have)
+
+            nrm.module.warn(
+                "Skipping switch-level discovery for read-only/delete workflow because "
+                "the vPC list endpoint is unavailable."
+            )
+
+            if state == "gathered":
+                return _set_lightweight_context([])
+
+            # Preserve explicit delete intent without full-fabric discovery.
+            # This keeps delete deterministic and avoids expensive inventory calls.
+            fallback_have = []
+            for item in config:
+                switch_id_val = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
+                peer_switch_id_val = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
+                if not switch_id_val or not peer_switch_id_val:
+                    continue
+
+                use_vpl_val = item.get("use_virtual_peer_link")
+                if use_vpl_val is None:
+                    use_vpl_val = item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True)
+
+                fallback_have.append(
+                    {
+                        VpcFieldNames.SWITCH_ID: switch_id_val,
+                        VpcFieldNames.PEER_SWITCH_ID: peer_switch_id_val,
+                        VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl_val,
+                    }
+                )
+
+            if fallback_have:
+                nrm.module.warn(
+                    "Using requested delete config as fallback existing set because "
+                    "vPC list query failed."
+                )
+                return _set_lightweight_context(fallback_have)
+
+            if config:
+                nrm.module.warn(
+                    "Delete config did not contain complete vPC pairs. "
+                    "No delete intents can be built from list-query fallback."
+                )
+                return _set_lightweight_context([])
+
+            nrm.module.warn(
+                "Delete-all requested with no explicit pairs and unavailable list endpoint. "
+                "Falling back to switch-level discovery."
+            )
+
+        # Step 2 (write-state enrichment): Query and validate fabric switches.
+        fabric_switches = _validate_fabric_switches(nd_v2, fabric_name)
+
+        if not fabric_switches:
+            nrm.module.warn(f"No switches found in fabric {fabric_name}")
+            nrm.module.params["_fabric_switches"] = []
+            nrm.module.params["_fabric_switches_count"] = 0
+            nrm.module.params["_have"] = []
+            nrm.module.params["_pending_create"] = []
+            nrm.module.params["_pending_delete"] = []
+            return []
+
+        # Keep only switch IDs for validation and serialize safely in module params.
+        fabric_switches_list = list(fabric_switches.keys())
+        nrm.module.params["_fabric_switches"] = fabric_switches_list
+        nrm.module.params["_fabric_switches_count"] = len(fabric_switches)
+
+        # Build IP-to-SN mapping (extract before dict is discarded).
+        ip_to_sn = {
+            sw.get(VpcFieldNames.FABRIC_MGMT_IP): sw.get(VpcFieldNames.SERIAL_NUMBER)
+            for sw in fabric_switches.values()
+            if VpcFieldNames.FABRIC_MGMT_IP in sw
+        }
+        nrm.module.params["_ip_to_sn_mapping"] = ip_to_sn
+
+        # Step 3: Track 3-state VPC pairs (have/pending_create/pending_delete).
         pending_create = []
         pending_delete = []
         processed_switches = set()
 
-        # Build set of switch IDs from user config to limit recommendation queries.
-        # For gathered state, main() stores filters in _gather_filter_config and clears
-        # config before framework initialization to guarantee read-only behavior.
-        state = nrm.module.params.get("state", "merged")
-        if state == "gathered":
-            config = nrm.module.params.get("_gather_filter_config") or []
-        else:
-            config = nrm.module.params.get("config") or []
         desired_pairs = {}
         config_switch_ids = set()
         for item in config:
-            # Note: config items have been normalized to snake_case (switch_id, peer_switch_id)
-            # not the original Ansible input names (peer1_switch_id, peer2_switch_id)
+            # Config items are normalized to snake_case in main().
             switch_id_val = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
             peer_switch_id_val = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
 
@@ -1764,8 +1890,7 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 processed_switches.add(switch_id)
                 processed_switches.add(peer_switch_id)
 
-                # For configured pairs, prefer direct vPC query as the source of truth.
-                # Recommendation payloads can be stale for useVirtualPeerLink.
+                # For configured pairs, prefer direct vPC query as source of truth.
                 try:
                     vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
                     rest_send = nd_v2._get_rest_send()
@@ -1800,9 +1925,8 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                             if desired_use_vpl is None:
                                 desired_use_vpl = desired_item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK)
 
-                        # Narrow override: only trust direct payload for write states when
-                        # it matches desired pair intent. This preserves idempotence without
-                        # masking true post-delete stale data during gathered/deleted flows.
+                        # Narrow override: trust direct payload only for write states
+                        # when it matches desired pair intent.
                         if state in ("merged", "replaced", "overridden") and desired_item is not None:
                             if desired_use_vpl is None or bool(desired_use_vpl) == bool(use_vpl):
                                 nrm.module.warn(
@@ -1845,7 +1969,7 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                             VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                         })
                     else:
-                        # VPC configured but query failed - mark as pending delete
+                        # VPC configured but query failed - mark as pending delete.
                         pending_delete.append({
                             VpcFieldNames.SWITCH_ID: switch_id,
                             VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
@@ -1853,7 +1977,6 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                         })
             elif not config_switch_ids or switch_id in config_switch_ids:
                 # For unconfigured switches, prefer direct vPC pair query first.
-                # Recommendation endpoints can lag and may return stale useVirtualPeerLink.
                 try:
                     vpc_pair_path = VpcPairEndpoints.switch_vpc_pair(fabric_name, switch_id)
                     rest_send = nd_v2._get_rest_send()
@@ -1928,8 +2051,8 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                                 VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
                                 VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl,
                             })
-        
-        # Step 4: Store all states for use in create/update/delete
+
+        # Step 4: Store all states for use in create/update/delete.
         nrm.module.params["_have"] = have
         nrm.module.params["_pending_create"] = pending_create
         nrm.module.params["_pending_delete"] = pending_delete
@@ -1956,16 +2079,12 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
             pair_by_key.pop(key, None)
 
         existing_pairs = list(pair_by_key.values())
-
-        # Note: Memory optimization already applied at line 1219-1220
-        # fabric_switches dict was converted to set immediately after query
         return existing_pairs
 
     except NDModuleError as error:
         error_dict = error.to_dict()
-        # Preserve original API error message with different key to avoid conflict
-        if 'msg' in error_dict:
-            error_dict['api_error_msg'] = error_dict.pop('msg')
+        if "msg" in error_dict:
+            error_dict["api_error_msg"] = error_dict.pop("msg")
         _raise_vpc_error(
             msg=f"Failed to query VPC pairs: {error.msg}",
             fabric=fabric_name,
@@ -2732,6 +2851,7 @@ def main():
     )
 
     module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=True)
+    setup_logging(module)
 
     # Module-level validations
     if sys.version_info < (3, 9):
@@ -2744,7 +2864,7 @@ def main():
         )
 
     # State-specific parameter validations
-    state = module.params.get("state")
+    state = module.params.get("state", "merged")
     deploy = module.params.get("deploy")
     dry_run = module.params.get("dry_run")
 
@@ -2762,7 +2882,6 @@ def main():
     # - state=deleted
     # - state=overridden with empty config (interpreted as delete-all)
     force = module.params.get("force", False)
-    state = module.params.get("state", "merged")
     user_config = module.params.get("config") or []
     force_applicable = state == "deleted" or (
         state == "overridden" and len(user_config) == 0

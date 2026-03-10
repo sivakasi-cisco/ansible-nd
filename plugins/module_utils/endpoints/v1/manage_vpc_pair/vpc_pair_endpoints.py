@@ -25,8 +25,10 @@ __author__ = "Sivakami Sivaraman"
 
 from typing import TYPE_CHECKING, Literal, Optional
 
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.base_paths import VpcPairBasePath
-from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.mixins import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.base_paths import (
+    VpcPairBasePath,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.mixins import (
     ComponentTypeMixin,
     FabricNameMixin,
     FilterMixin,
