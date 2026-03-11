@@ -6,29 +6,27 @@
     ##                 SETUP                    ##
     ##############################################
 
-    - name: DELETE - Test Entry Point - [nd_vpc_pair]
-      ansible.builtin.debug:
-        msg:
-          - "----------------------------------------------------------------"
-          - "+         Executing Delete Tests - [nd_vpc_pair]              +"
-          - "----------------------------------------------------------------"
+    - name: Import nd_vpc_pair Base Tasks
+      import_tasks: base_tasks.yaml
       tags: delete
 
     ##############################################
-    ##      Setup Internal TestCase Variables  ##
+    ##      Setup Delete TestCase Variables    ##
     ##############################################
 
-    - name: DELETE - Setup Internal TestCase Variables
+    - name: DELETE - Setup config
       ansible.builtin.set_fact:
-        deploy_local: true
-        test_fabric: "{{ fabric_name }}"
-        test_switch1: "{{ switch1_serial }}"
-        test_switch2: "{{ switch2_serial }}"
-        test_data_deleted:
-          vpc_pair_setup_conf:
-            - peer1_switch_id: "{{ switch1_serial }}"
-              peer2_switch_id: "{{ switch2_serial }}"
-              use_virtual_peer_link: true
+        vpc_pair_conf:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: true
+      delegate_to: localhost
+      tags: delete
+
+    - name: Import Configuration Prepare Tasks - delete_setup
+      vars:
+        file: delete_setup
+      import_tasks: conf_prep_tasks.yaml
       tags: delete
 
     ##############################################
@@ -36,17 +34,11 @@
     ##############################################
 
     # TC1 - Setup: Create vPC pair for deletion tests
-    - name: DELETE - TC1 - DELETE - Clean up any existing vPC pairs
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: deleted
-      tags: delete
-
     - name: DELETE - TC1 - MERGE - Create vPC pair for deletion testing
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_deleted.vpc_pair_setup_conf }}"
+        config: "{{ nd_vpc_pair_delete_setup_conf }}"
       register: result
       tags: delete
 
@@ -58,7 +50,7 @@
       tags: delete
 
     - name: DELETE - TC1 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -67,16 +59,22 @@
       register: verify_result
       tags: delete
 
-    - name: DELETE - TC1 - ASSERT - Verify vPC pair state in ND
+    - name: DELETE - TC1 - VALIDATE - Verify vPC pair state in ND
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_delete_setup_conf }}"
+      register: validation
+      tags: delete
+
+    - name: DELETE - TC1 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
+          - validation.failed == false
       tags: delete
 
     # TC2 - Delete vPC pair with specific config
     - name: DELETE - TC2 - DELETE - Delete vPC pair with specific peer config
-      cisco.nd.nd_vpc_pair: &delete_specific
+      cisco.nd.nd_manage_vpc_pair: &delete_specific
         fabric_name: "{{ test_fabric }}"
         state: deleted
         config:
@@ -93,7 +91,7 @@
       tags: delete
 
     - name: DELETE - TC2 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -102,16 +100,23 @@
       register: verify_result
       tags: delete
 
-    - name: DELETE - TC2 - ASSERT - Verify vPC pair deletion
+    - name: DELETE - TC2 - VALIDATE - Verify vPC pair deletion
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: []
+        mode: "count_only"
+      register: validation
+      tags: delete
+
+    - name: DELETE - TC2 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 0'
+          - validation.failed == false
       tags: delete
 
     # TC3 - Idempotence test for deletion
     - name: DELETE - TC3 - conf - Idempotence
-      cisco.nd.nd_vpc_pair: *delete_specific
+      cisco.nd.nd_manage_vpc_pair: *delete_specific
       register: result
       tags: delete
 
@@ -124,10 +129,10 @@
 
     # TC4 - Create another vPC pair for bulk deletion test
     - name: DELETE - TC4 - MERGE - Create vPC pair for bulk deletion testing
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_deleted.vpc_pair_setup_conf }}"
+        config: "{{ nd_vpc_pair_delete_setup_conf }}"
       register: result
       tags: delete
 
@@ -139,7 +144,7 @@
       tags: delete
 
     - name: DELETE - TC4 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -148,16 +153,23 @@
       register: verify_result
       tags: delete
 
-    - name: DELETE - TC4 - ASSERT - Verify vPC pair state in ND for bulk deletion setup
+    - name: DELETE - TC4 - VALIDATE - Verify vPC pair state in ND for bulk deletion setup
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_delete_setup_conf }}"
+        mode: "exists"
+      register: validation
+      tags: delete
+
+    - name: DELETE - TC4 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
+          - validation.failed == false
       tags: delete
 
     # TC5 - Delete all vPC pairs without specific config
     - name: DELETE - TC5 - DELETE - Delete all vPC pairs without specific config
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
       register: result
@@ -171,22 +183,29 @@
       tags: delete
 
     - name: DELETE - TC5 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
       register: verify_result
       tags: delete
 
-    - name: DELETE - TC5 - ASSERT - Verify bulk deletion
+    - name: DELETE - TC5 - VALIDATE - Verify bulk deletion
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: []
+        mode: "count_only"
+      register: validation
+      tags: delete
+
+    - name: DELETE - TC5 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 0'
+          - validation.failed == false
       tags: delete
 
     # TC6 - Delete from empty fabric (should be no-op)
     - name: DELETE - TC6 - DELETE - Delete from empty fabric (no-op)
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
       register: result
@@ -201,10 +220,10 @@
 
     # TC7 - Force deletion bypass path
     - name: DELETE - TC7 - MERGE - Create vPC pair for force delete test
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_deleted.vpc_pair_setup_conf }}"
+        config: "{{ nd_vpc_pair_delete_setup_conf }}"
       register: result
       tags: delete
 
@@ -215,7 +234,7 @@
       tags: delete
 
     - name: DELETE - TC7 - DELETE - Delete vPC pair with force true
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
         force: true
@@ -233,7 +252,7 @@
       tags: delete
 
     - name: DELETE - TC7 - GATHER - Verify force deletion result in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -242,11 +261,18 @@
       register: verify_result
       tags: delete
 
-    - name: DELETE - TC7 - ASSERT - Confirm pair deleted with force
+    - name: DELETE - TC7 - VALIDATE - Confirm pair deleted with force
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: []
+        mode: "count_only"
+      register: validation
+      tags: delete
+
+    - name: DELETE - TC7 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 0'
+          - validation.failed == false
       tags: delete
 
     ##############################################
@@ -254,7 +280,7 @@
     ##############################################
 
     - name: DELETE - END - ensure clean state
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
       when: cleanup_at_end | default(true)

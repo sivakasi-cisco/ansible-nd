@@ -6,29 +6,27 @@
     ##                 SETUP                    ##
     ##############################################
 
-    - name: GATHER - Test Entry Point - [nd_vpc_pair]
-      ansible.builtin.debug:
-        msg:
-          - "----------------------------------------------------------------"
-          - "+          Executing Gather Tests - [nd_vpc_pair]               +"
-          - "----------------------------------------------------------------"
+    - name: Import nd_vpc_pair Base Tasks
+      import_tasks: base_tasks.yaml
       tags: gather
 
     ##############################################
-    ##      Setup Internal TestCase Variables  ##
+    ##      Setup Gather TestCase Variables    ##
     ##############################################
 
-    - name: GATHER - Setup Internal TestCase Variables
+    - name: GATHER - Setup config
       ansible.builtin.set_fact:
-        deploy_local: true
-        test_fabric: "{{ fabric_name }}"
-        test_switch1: "{{ switch1_serial }}"
-        test_switch2: "{{ switch2_serial }}"
-        test_data_query:
-          vpc_pair_setup_conf:
-            - peer1_switch_id: "{{ switch1_serial }}"
-              peer2_switch_id: "{{ switch2_serial }}"
-              use_virtual_peer_link: true
+        vpc_pair_conf:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: true
+      delegate_to: localhost
+      tags: gather
+
+    - name: Import Configuration Prepare Tasks - gather_setup
+      vars:
+        file: gather_setup
+      import_tasks: conf_prep_tasks.yaml
       tags: gather
 
     ##############################################
@@ -36,17 +34,11 @@
     ##############################################
 
     # TC1 - Setup: Create vPC pair for gather tests
-    - name: GATHER - TC1 - DELETE - Clean up any existing vPC pairs
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: deleted
-      tags: gather
-
     - name: GATHER - TC1 - MERGE - Create vPC pair for testing
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_query.vpc_pair_setup_conf }}"
+        config: "{{ nd_vpc_pair_gather_setup_conf }}"
       register: result
       tags: gather
 
@@ -57,22 +49,28 @@
       tags: gather
 
     - name: GATHER - TC1 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
       register: verify_result
       tags: gather
 
-    - name: GATHER - TC1 - ASSERT - Verify vPC pair state in ND
+    - name: GATHER - TC1 - VALIDATE - Verify vPC pair state in ND
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_gather_setup_conf }}"
+      register: validation
+      tags: gather
+
+    - name: GATHER - TC1 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
+          - validation.failed == false
       tags: gather
 
     # TC2 - Gather with no filters
     - name: GATHER - TC2 - GATHER - Gather all vPC pairs with no filters
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
       register: result
@@ -87,7 +85,7 @@
 
     # TC3 - Gather with both peers specified
     - name: GATHER - TC3 - GATHER - Gather vPC pair with both peers specified
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -103,9 +101,9 @@
           - '(result.gathered.vpc_pairs | length) == 1'
       tags: gather
 
-    # TC4 - Gather with one peer specified (not supported in nd_vpc_pair)
+    # TC4 - Gather with one peer specified (not supported in nd_manage_vpc_pair)
     - name: GATHER - TC4 - GATHER - Gather vPC pair with one peer specified
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -121,9 +119,9 @@
           - result.msg is defined
       tags: gather
 
-    # TC5 - Gather with second peer specified (not supported in nd_vpc_pair)
+    # TC5 - Gather with second peer specified (not supported in nd_manage_vpc_pair)
     - name: GATHER - TC5 - GATHER - Gather vPC pair with second peer specified
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -141,7 +139,7 @@
 
     # TC6 - Gather with non-existent peer
     - name: GATHER - TC6 - GATHER - Gather vPC pair with non-existent peer
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -159,7 +157,7 @@
 
     # TC7 - Gather with custom query_timeout
     - name: GATHER - TC7 - GATHER - Gather with query_timeout override
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         query_timeout: 20
@@ -175,7 +173,7 @@
 
     # TC8 - gathered + deploy validation (must fail)
     - name: GATHER - TC8 - GATHER - Gather with deploy enabled (invalid)
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         deploy: true
@@ -192,7 +190,7 @@
 
     # TC9 - gathered + dry_run validation (must fail)
     - name: GATHER - TC9 - GATHER - Gather with dry_run enabled (invalid)
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         dry_run: true
@@ -216,7 +214,7 @@
       tags: gather
 
     - name: GATHER - TC10 - GATHER - Query module gathered output for comparison
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
       register: gathered_result
@@ -259,7 +257,7 @@
 
     # TC11 - Validate normalized pair matching for reversed switch order
     - name: GATHER - TC11 - GATHER - Gather with reversed/duplicate pair filters
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: gathered
         config:
@@ -282,7 +280,7 @@
     ##############################################
 
     - name: GATHER - END - remove vPC pairs
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
       when: cleanup_at_end | default(true)

@@ -6,50 +6,71 @@
     ##                 SETUP                    ##
     ##############################################
 
-    - name: MERGE - Test Entry Point - [nd_vpc_pair]
-      ansible.builtin.debug:
-        msg:
-          - "----------------------------------------------------------------"
-          - "+          Executing Merge Tests - [nd_vpc_pair]              +"
-          - "----------------------------------------------------------------"
+    - name: Import nd_vpc_pair Base Tasks
+      import_tasks: base_tasks.yaml
       tags: merge
 
     ##############################################
-    ##      Setup Internal TestCase Variables  ##
+    ##      Setup Merge TestCase Variables     ##
     ##############################################
 
-    - name: MERGE - Setup Internal TestCase Variables
+    - name: MERGE - Setup full config
       ansible.builtin.set_fact:
-        deploy_local: false
-        test_fabric: "{{ fabric_name }}"
-        test_switch1: "{{ switch1_serial }}"
-        test_switch2: "{{ switch2_serial }}"
-        test_fabric_type: "{{ fabric_type | default('LANClassic') }}"
-        test_data_merged:
-          vpc_pair_full_conf:
-            - peer1_switch_id: "{{ switch1_serial }}"
-              peer2_switch_id: "{{ switch2_serial }}"
-              use_virtual_peer_link: true
-          vpc_pair_full_deployed_conf:
-            - peer1_switch_id: "{{ switch1_serial }}"
-              peer2_switch_id: "{{ switch2_serial }}"
-              use_virtual_peer_link: true
-          vpc_pair_modified_conf:
-            - peer1_switch_id: "{{ switch1_serial }}"
-              peer2_switch_id: "{{ switch2_serial }}"
-              use_virtual_peer_link: false
-          vpc_pair_minimal_conf:
-            - peer1_switch_id: "{{ switch1_serial }}"
-              peer2_switch_id: "{{ switch2_serial }}"
-          vpc_pair_no_deploy_conf:
-            - peer1_switch_id: "{{ switch1_serial }}"
-              peer2_switch_id: "{{ switch2_serial }}"
-              use_virtual_peer_link: true
+        vpc_pair_conf:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: true
+      delegate_to: localhost
       tags: merge
 
-    - name: MERGE - Change deploy to true
+    - name: Import Configuration Prepare Tasks - merge_full
+      vars:
+        file: merge_full
+      import_tasks: conf_prep_tasks.yaml
+      tags: merge
+
+    - name: MERGE - Setup modified config
       ansible.builtin.set_fact:
-        deploy_local: true
+        vpc_pair_conf:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: false
+      delegate_to: localhost
+      tags: merge
+
+    - name: Import Configuration Prepare Tasks - merge_modified
+      vars:
+        file: merge_modified
+      import_tasks: conf_prep_tasks.yaml
+      tags: merge
+
+    - name: MERGE - Setup minimal config
+      ansible.builtin.set_fact:
+        vpc_pair_conf:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+      delegate_to: localhost
+      tags: merge
+
+    - name: Import Configuration Prepare Tasks - merge_minimal
+      vars:
+        file: merge_minimal
+      import_tasks: conf_prep_tasks.yaml
+      tags: merge
+
+    - name: MERGE - Setup no-deploy config
+      ansible.builtin.set_fact:
+        vpc_pair_conf:
+          - peer1_switch_id: "{{ test_switch1 }}"
+            peer2_switch_id: "{{ test_switch2 }}"
+            use_virtual_peer_link: true
+      delegate_to: localhost
+      tags: merge
+
+    - name: Import Configuration Prepare Tasks - merge_no_deploy
+      vars:
+        file: merge_no_deploy
+      import_tasks: conf_prep_tasks.yaml
       tags: merge
 
     ##############################################
@@ -57,17 +78,11 @@
     ##############################################
 
     # TC1 - Create vPC pair with full configuration
-    - name: MERGE - TC1 - DELETE - Clean up any existing vPC pairs
-      cisco.nd.nd_vpc_pair:
-        fabric_name: "{{ test_fabric }}"
-        state: deleted
-      tags: merge
-
     - name: MERGE - TC1 - MERGE - Create vPC pair with full configuration
-      cisco.nd.nd_vpc_pair: &conf_full
+      cisco.nd.nd_manage_vpc_pair: &conf_full
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_merged.vpc_pair_full_conf }}"
+        config: "{{ nd_vpc_pair_merge_full_conf }}"
       register: result
       tags: merge
 
@@ -79,7 +94,7 @@
       tags: merge
 
     - name: MERGE - TC1 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -88,15 +103,22 @@
       register: verify_result
       tags: merge
 
-    - name: MERGE - TC1 - ASSERT - Verify vPC pair state in ND
+    - name: MERGE - TC1 - VALIDATE - Verify vPC pair state in ND
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_merge_full_conf }}"
+        changed: "{{ result.changed }}"
+      register: validation
+      tags: merge
+
+    - name: MERGE - TC1 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
+          - validation.failed == false
       tags: merge
 
     - name: MERGE - TC1 - conf - Idempotence
-      cisco.nd.nd_vpc_pair: *conf_full
+      cisco.nd.nd_manage_vpc_pair: *conf_full
       register: result
       tags: merge
 
@@ -109,10 +131,10 @@
 
     # TC2 - Modify existing vPC pair configuration
     - name: MERGE - TC2 - MERGE - Modify vPC pair configuration
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_merged.vpc_pair_modified_conf }}"
+        config: "{{ nd_vpc_pair_merge_modified_conf }}"
       register: result
       when: test_fabric_type == "LANClassic"
       tags: merge
@@ -125,7 +147,7 @@
       tags: merge
 
     - name: MERGE - TC2 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -135,18 +157,25 @@
       when: test_fabric_type == "LANClassic"
       tags: merge
 
-    - name: MERGE - TC2 - ASSERT - Verify vPC pair state in ND
+    - name: MERGE - TC2 - VALIDATE - Verify modified vPC pair state
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_merge_modified_conf }}"
+        mode: "full"
+      register: validation
+      when: test_fabric_type == "LANClassic"
+      tags: merge
+
+    - name: MERGE - TC2 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
-          - verify_result.gathered.vpc_pairs[0].use_virtual_peer_link == false
+          - validation.failed == false
       when: test_fabric_type == "LANClassic"
       tags: merge
 
     # TC2b - VXLANFabric specific test
     - name: MERGE - TC2b - MERGE - Merge vPC pair for VXLAN fabric
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         config:
@@ -164,7 +193,7 @@
       tags: merge
 
     - name: MERGE - TC2b - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
       register: verify_result
@@ -173,7 +202,7 @@
 
     # TC3 - Delete vPC pair
     - name: MERGE - TC3 - DELETE - Delete vPC pair
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
         config:
@@ -189,7 +218,7 @@
       tags: merge
 
     - name: MERGE - TC3 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -199,18 +228,25 @@
       tags: merge
 
     - name: MERGE - TC3 - ASSERT - Verify vPC pair deletion
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: []
+        mode: "count_only"
+      register: validation
+      tags: merge
+
+    - name: MERGE - TC3 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 0'
+          - validation.failed == false
       tags: merge
 
     # TC4 - Create vPC pair with minimal configuration
     - name: MERGE - TC4 - MERGE - Create vPC pair with minimal configuration
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_merged.vpc_pair_minimal_conf }}"
+        config: "{{ nd_vpc_pair_merge_minimal_conf }}"
       register: result
       when: test_fabric_type == "LANClassic"
       tags: merge
@@ -223,7 +259,7 @@
       tags: merge
 
     - name: MERGE - TC4 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -233,17 +269,25 @@
       when: test_fabric_type == "LANClassic"
       tags: merge
 
-    - name: MERGE - TC4 - ASSERT - Verify vPC pair state in ND
+    - name: MERGE - TC4 - VALIDATE - Verify minimal vPC pair
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_merge_minimal_conf }}"
+        mode: "exists"
+      register: validation
+      when: test_fabric_type == "LANClassic"
+      tags: merge
+
+    - name: MERGE - TC4 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
+          - validation.failed == false
       when: test_fabric_type == "LANClassic"
       tags: merge
 
     # TC4b - Delete vPC pair after minimal test
     - name: MERGE - TC4b - DELETE - Delete vPC pair after minimal test
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
         config:
@@ -262,9 +306,9 @@
 
     # TC5 - Create vPC pair with defaults (state omitted)
     - name: MERGE - TC5 - MERGE - Create vPC pair with defaults
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
-        config: "{{ test_data_merged.vpc_pair_minimal_conf }}"
+        config: "{{ nd_vpc_pair_merge_minimal_conf }}"
       register: result
       tags: merge
 
@@ -275,7 +319,7 @@
       tags: merge
 
     - name: MERGE - TC5 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -284,16 +328,23 @@
       register: verify_result
       tags: merge
 
-    - name: MERGE - TC5 - ASSERT - Verify vPC pair state in ND
+    - name: MERGE - TC5 - VALIDATE - Verify vPC pair state
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_merge_minimal_conf }}"
+        mode: "exists"
+      register: validation
+      tags: merge
+
+    - name: MERGE - TC5 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
+          - validation.failed == false
       tags: merge
 
     # TC5b - Delete vPC pair after defaults test
     - name: MERGE - TC5b - DELETE - Delete vPC pair after defaults test
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
         config:
@@ -310,11 +361,11 @@
 
     # TC6 - Create vPC pair with deploy flag false
     - name: MERGE - TC6 - MERGE - Create vPC pair with deploy false
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         deploy: false
-        config: "{{ test_data_merged.vpc_pair_no_deploy_conf }}"
+        config: "{{ nd_vpc_pair_merge_no_deploy_conf }}"
       register: result
       tags: merge
 
@@ -326,7 +377,7 @@
       tags: merge
 
     - name: MERGE - TC6 - GATHER - Get vPC pair state in ND
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -335,16 +386,22 @@
       register: verify_result
       tags: merge
 
-    - name: MERGE - TC6 - ASSERT - Verify vPC pair state in ND
+    - name: MERGE - TC6 - VALIDATE - Verify vPC pair state
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: "{{ nd_vpc_pair_merge_no_deploy_conf }}"
+      register: validation
+      tags: merge
+
+    - name: MERGE - TC6 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 1'
+          - validation.failed == false
       tags: merge
 
     # TC7 - Merge with vpc_pair_details default template settings
     - name: MERGE - TC7 - MERGE - Update vPC pair with default vpc_pair_details
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         config:
@@ -369,7 +426,7 @@
 
     # TC8 - Merge with vpc_pair_details custom template settings
     - name: MERGE - TC8 - MERGE - Update vPC pair with custom vpc_pair_details
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         config:
@@ -394,7 +451,7 @@
 
     # TC9 - Test invalid configurations
     - name: MERGE - TC9 - MERGE - Create vPC pair with invalid peer switch
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         config:
@@ -414,7 +471,7 @@
 
     # TC10 - Create vPC pair with deploy enabled (actual deployment path)
     - name: MERGE - TC10 - DELETE - Ensure vPC pair is absent before deploy test
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
         config:
@@ -451,7 +508,7 @@
       tags: merge
 
     - name: MERGE - TC10 - MERGE - Create vPC pair with deploy true
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         deploy: true
@@ -471,7 +528,7 @@
 
     # TC11 - Delete with custom api_timeout
     - name: MERGE - TC11 - DELETE - Delete vPC pair with api_timeout override
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
         api_timeout: 60
@@ -489,7 +546,7 @@
 
     # TC12 - dry_run should not apply configuration changes
     - name: MERGE - TC12 - DELETE - Ensure vPC pair is absent before dry_run test
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
         config:
@@ -499,11 +556,11 @@
       tags: merge
 
     - name: MERGE - TC12 - MERGE - Run dry_run create for vPC pair
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         dry_run: true
-        config: "{{ test_data_merged.vpc_pair_full_conf }}"
+        config: "{{ nd_vpc_pair_merge_full_conf }}"
       register: result
       tags: merge
 
@@ -514,7 +571,7 @@
       tags: merge
 
     - name: MERGE - TC12 - GATHER - Verify dry_run did not create vPC pair
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -523,19 +580,26 @@
       register: verify_result
       tags: merge
 
-    - name: MERGE - TC12 - ASSERT - Confirm no persistent changes from dry_run
+    - name: MERGE - TC12 - VALIDATE - Confirm no persistent changes from dry_run
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: []
+        mode: "count_only"
+      register: validation
+      tags: merge
+
+    - name: MERGE - TC12 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 0'
+          - validation.failed == false
       tags: merge
 
     # TC13 - Native Ansible check_mode should not apply configuration changes
     - name: MERGE - TC13 - MERGE - Run check_mode create for vPC pair
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
-        config: "{{ test_data_merged.vpc_pair_full_conf }}"
+        config: "{{ nd_vpc_pair_merge_full_conf }}"
       check_mode: true
       register: result
       tags: merge
@@ -547,7 +611,7 @@
       tags: merge
 
     - name: MERGE - TC13 - GATHER - Verify check_mode did not create vPC pair
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         state: gathered
         fabric_name: "{{ test_fabric }}"
         config:
@@ -556,11 +620,18 @@
       register: verify_result
       tags: merge
 
-    - name: MERGE - TC13 - ASSERT - Confirm no persistent changes from check_mode
+    - name: MERGE - TC13 - VALIDATE - Confirm no persistent changes from check_mode
+      cisco.nd.tests.integration.nd_vpc_pair_validate:
+        gathered_data: "{{ verify_result }}"
+        expected_data: []
+        mode: "count_only"
+      register: validation
+      tags: merge
+
+    - name: MERGE - TC13 - ASSERT - Validation passed
       ansible.builtin.assert:
         that:
-          - verify_result.failed == false
-          - '(verify_result.gathered.vpc_pairs | length) == 0'
+          - validation.failed == false
       tags: merge
 
     # TC14 - Validate vpcPairSupport enforcement path (isPairingAllowed == false)
@@ -617,7 +688,7 @@
       tags: merge
 
     - name: MERGE - TC14 - MERGE - Verify unsupported pairing is blocked by module
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: merged
         config:
@@ -651,7 +722,7 @@
     ##############################################
 
     - name: MERGE - END - remove vPC pairs
-      cisco.nd.nd_vpc_pair:
+      cisco.nd.nd_manage_vpc_pair:
         fabric_name: "{{ test_fabric }}"
         state: deleted
       when: cleanup_at_end | default(true)
