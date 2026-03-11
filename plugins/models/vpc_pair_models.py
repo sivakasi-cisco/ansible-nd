@@ -36,34 +36,19 @@ from ansible_collections.cisco.nd.plugins.models.base import (
 from ansible_collections.cisco.nd.plugins.models.nested import NDVpcPairNestedModel
 
 # Import enums from centralized location
-try:
-    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
-        VpcActionEnum,
-        VpcPairTypeEnum,
-        KeepAliveVrfEnum,
-        PoModeEnum,
-        PortChannelDuplexEnum,
-        VpcRoleEnum,
-        MaintenanceModeEnum,
-        ComponentTypeOverviewEnum,
-        ComponentTypeSupportEnum,
-        VpcPairViewEnum,
-        VpcFieldNames,
-    )
-except Exception:
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import (
-        VpcActionEnum,
-        VpcPairTypeEnum,
-        KeepAliveVrfEnum,
-        PoModeEnum,
-        PortChannelDuplexEnum,
-        VpcRoleEnum,
-        MaintenanceModeEnum,
-        ComponentTypeOverviewEnum,
-        ComponentTypeSupportEnum,
-        VpcPairViewEnum,
-        VpcFieldNames,
-    )
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
+    VpcActionEnum,
+    VpcPairTypeEnum,
+    KeepAliveVrfEnum,
+    PoModeEnum,
+    PortChannelDuplexEnum,
+    VpcRoleEnum,
+    MaintenanceModeEnum,
+    ComponentTypeOverviewEnum,
+    ComponentTypeSupportEnum,
+    VpcPairViewEnum,
+    VpcFieldNames,
+)
 
 # ============================================================================
 # NESTED MODELS (No Identifiers)

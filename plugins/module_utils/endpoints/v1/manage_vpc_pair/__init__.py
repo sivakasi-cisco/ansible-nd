@@ -74,7 +74,7 @@ try:
         EpVpcPairConsistencyGet,
         EpVpcPairsListGet,
     )
-    from ansible_collections.cisco.nd.plugins.models.model_playbook_vpc_pair import (
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_schemas import (
         VpcPairDetailsDefault,
         VpcPairDetailsCustom,
         VpcPairingRequest,

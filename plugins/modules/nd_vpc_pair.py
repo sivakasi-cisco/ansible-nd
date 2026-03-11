@@ -278,16 +278,10 @@ from ansible.module_utils.basic import AnsibleModule, missing_required_lib
 from ansible_collections.cisco.nd.plugins.module_utils.common.log import setup_logging
 
 # Service layer imports
-try:
-    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_resources import (
-        VpcPairResourceService,
-        VpcPairResourceError,
-    )
-except Exception:
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_resources import (
-        VpcPairResourceService,
-        VpcPairResourceError,
-    )
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_resources import (
+    VpcPairResourceService,
+    VpcPairResourceError,
+)
 
 # Static imports so Ansible's AnsiballZ packager includes these files in the
 # module zip. Keep them optional when framework files are intentionally absent.
@@ -310,18 +304,11 @@ except Exception:
 
 # Enum imports
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
-try:
-    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
-        ComponentTypeSupportEnum,
-        VpcActionEnum,
-        VpcFieldNames,
-    )
-except Exception:
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair import (
-        ComponentTypeSupportEnum,
-        VpcActionEnum,
-        VpcFieldNames,
-    )
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
+    ComponentTypeSupportEnum,
+    VpcActionEnum,
+    VpcFieldNames,
+)
 
 try:
     from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_endpoints import (
@@ -370,7 +357,7 @@ try:
         VpcPairDetailsCustom,
     )
 except Exception:
-    from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.vpc_pair_details import (
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_schemas import (
         VpcPairDetailsDefault,
         VpcPairDetailsCustom,
     )

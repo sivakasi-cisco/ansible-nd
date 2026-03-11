@@ -9,11 +9,11 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 """
-Compatibility bridge for vPC playbook detail models.
+Backward-compatible export surface for vPC pair schemas.
 
-Primary source of truth lives in `plugins/models/model_playbook_vpc_pair.py`.
-This module exists only for Ansible module runtime compatibility when
-`plugins/models` is not available in the AnsiballZ payload.
+Primary source of truth lives in `plugins/models/vpc_pair_models.py`.
+This module also provides local fallback models for AnsiballZ runtimes where
+`plugins/models` files may not be packaged.
 """
 
 from typing import Any, Dict, List, Optional, Literal, Annotated
@@ -25,21 +25,22 @@ from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat im
     Field,
 )
 
-
 try:
-    from ansible_collections.cisco.nd.plugins.models.model_playbook_vpc_pair import (  # noqa: F401
-        VpcPairDetailsDefault,
-        VpcPairDetailsCustom,
+    from ansible_collections.cisco.nd.plugins.models.base import (  # noqa: F401
+        coerce_str_to_int,
+        coerce_to_bool,
+        coerce_list_of_str,
+        FlexibleInt,
+        FlexibleBool,
+        FlexibleListStr,
+        NDVpcPairBaseModel,
     )
+    from ansible_collections.cisco.nd.plugins.models.nested import NDVpcPairNestedModel  # noqa: F401
+    from ansible_collections.cisco.nd.plugins.models.vpc_pair_models import *  # noqa: F401,F403
 except Exception:
-    try:
-        from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (  # noqa: F401
-            KeepAliveVrfEnum,
-        )
-    except Exception:
-        from ansible_collections.cisco.nd.plugins.module_utils.manage.vpc_pair.enums import (  # noqa: F401
-            KeepAliveVrfEnum,
-        )
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (  # noqa: F401
+        KeepAliveVrfEnum,
+    )
 
     def coerce_str_to_int(data):
         if data is None:
