@@ -43,6 +43,45 @@ class VpcPairStateMachine(NDStateMachine):
         self.current_identifier = None
         self.existing_config: Dict[str, Any] = {}
         self.proposed_config: Dict[str, Any] = {}
+        self.logs: List[Dict[str, Any]] = []
+        self.result: Dict[str, Any] = {}
+
+    def format_log(
+        self,
+        identifier: Any,
+        status: str,
+        before_data: Optional[Any] = None,
+        after_data: Optional[Any] = None,
+        sent_payload_data: Optional[Any] = None,
+    ) -> None:
+        """Collect operation log entries expected by nd_manage_vpc_pair flows."""
+        log_entry: Dict[str, Any] = {"identifier": identifier, "status": status}
+        if before_data is not None:
+            log_entry["before"] = before_data
+        if after_data is not None:
+            log_entry["after"] = after_data
+        if sent_payload_data is not None:
+            log_entry["sent_payload"] = sent_payload_data
+        self.logs.append(log_entry)
+
+    def add_logs_and_outputs(self) -> None:
+        """
+        Build final result payload compatible with nd_manage_vpc_pair runtime.
+        """
+        self.output.assign(
+            after=getattr(self, "existing", None),
+            before=getattr(self, "before", None),
+            proposed=getattr(self, "proposed", None),
+            logs=self.logs,
+        )
+
+        formatted = self.output.format()
+        formatted.setdefault("current", formatted.get("after", []))
+        formatted.setdefault("response", [])
+        formatted.setdefault("result", [])
+        if self.logs and "logs" not in formatted:
+            formatted["logs"] = self.logs
+        self.result = formatted
 
     def manage_state(
         self,
@@ -151,6 +190,21 @@ class VpcPairStateMachine(NDStateMachine):
                     ),
                     sent_payload_data=sent_payload,
                 )
+            except VpcPairResourceError as e:
+                # The error details from nd_manage_vpc_pair are dropped by
+                # State machine wrappers in vpc_pair_resources.py
+                # Here is the exception handling to capture those details 
+                error_msg = f"Failed to process {identifier}: {e.msg}"
+                self.format_log(
+                    identifier=identifier,
+                    status="no_change",
+                    after_data=self.existing_config,
+                )
+                if not self.module.params.get("ignore_errors", False):
+                    error_details = dict(getattr(e, "details", {}) or {})
+                    error_details.setdefault("identifier", str(identifier))
+                    error_details.setdefault("error", str(e))
+                    raise VpcPairResourceError(msg=error_msg, **error_details)
             except Exception as e:
                 error_msg = f"Failed to process {identifier}: {e}"
                 self.format_log(
@@ -182,6 +236,13 @@ class VpcPairStateMachine(NDStateMachine):
                 self.model_orchestrator.delete(existing_item)
                 self.existing.delete(identifier)
                 self.format_log(identifier=identifier, status="deleted", after_data={})
+            except VpcPairResourceError as e:
+                error_msg = f"Failed to delete {identifier}: {e.msg}"
+                if not self.module.params.get("ignore_errors", False):
+                    error_details = dict(getattr(e, "details", {}) or {})
+                    error_details.setdefault("identifier", str(identifier))
+                    error_details.setdefault("error", str(e))
+                    raise VpcPairResourceError(msg=error_msg, **error_details)
             except Exception as e:
                 error_msg = f"Failed to delete {identifier}: {e}"
                 if not self.module.params.get("ignore_errors", False):
@@ -207,6 +268,13 @@ class VpcPairStateMachine(NDStateMachine):
                 self.model_orchestrator.delete(existing_item)
                 self.existing.delete(identifier)
                 self.format_log(identifier=identifier, status="deleted", after_data={})
+            except VpcPairResourceError as e:
+                error_msg = f"Failed to delete {identifier}: {e.msg}"
+                if not self.module.params.get("ignore_errors", False):
+                    error_details = dict(getattr(e, "details", {}) or {})
+                    error_details.setdefault("identifier", str(identifier))
+                    error_details.setdefault("error", str(e))
+                    raise VpcPairResourceError(msg=error_msg, **error_details)
             except Exception as e:
                 error_msg = f"Failed to delete {identifier}: {e}"
                 if not self.module.params.get("ignore_errors", False):
