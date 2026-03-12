@@ -55,7 +55,12 @@ COMMON_CONFIG = ConfigDict(validate_assignment=True)
 # ============================================================================
 
 
-class _EpVpcPairBase(FabricNameMixin, SwitchIdMixin, FromClusterMixin, BaseModel):
+class _EpVpcPairBase(
+    FabricNameMixin,
+    SwitchIdMixin,
+    FromClusterMixin,
+    BaseModel,
+):
     """
     Base class for VPC pair details endpoints.
 
@@ -169,7 +174,13 @@ class EpVpcPairPut(_EpVpcPairBase, TicketIdMixin):
 # ============================================================================
 
 
-class EpVpcPairSupportGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, ComponentTypeMixin, BaseModel):
+class EpVpcPairSupportGet(
+    FabricNameMixin,
+    SwitchIdMixin,
+    FromClusterMixin,
+    ComponentTypeMixin,
+    BaseModel,
+):
     """
     # Summary
 
@@ -228,7 +239,13 @@ class EpVpcPairSupportGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Comp
 # ============================================================================
 
 
-class EpVpcPairOverviewGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, ComponentTypeMixin, BaseModel):
+class EpVpcPairOverviewGet(
+    FabricNameMixin,
+    SwitchIdMixin,
+    FromClusterMixin,
+    ComponentTypeMixin,
+    BaseModel,
+):
     """
     # Summary
 
@@ -287,7 +304,12 @@ class EpVpcPairOverviewGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, Com
 # ============================================================================
 
 
-class EpVpcPairRecommendationGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, BaseModel):
+class EpVpcPairRecommendationGet(
+    FabricNameMixin,
+    SwitchIdMixin,
+    FromClusterMixin,
+    BaseModel,
+):
     """
     # Summary
 
@@ -347,7 +369,12 @@ class EpVpcPairRecommendationGet(FabricNameMixin, SwitchIdMixin, FromClusterMixi
 # ============================================================================
 
 
-class EpVpcPairConsistencyGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, BaseModel):
+class EpVpcPairConsistencyGet(
+    FabricNameMixin,
+    SwitchIdMixin,
+    FromClusterMixin,
+    BaseModel,
+):
     """
     # Summary
 
@@ -400,7 +427,15 @@ class EpVpcPairConsistencyGet(FabricNameMixin, SwitchIdMixin, FromClusterMixin, 
 # ============================================================================
 
 
-class EpVpcPairsListGet(FabricNameMixin, FromClusterMixin, FilterMixin, PaginationMixin, SortMixin, ViewMixin, BaseModel):
+class EpVpcPairsListGet(
+    FabricNameMixin,
+    FromClusterMixin,
+    FilterMixin,
+    PaginationMixin,
+    SortMixin,
+    ViewMixin,
+    BaseModel,
+):
     """
     # Summary
 

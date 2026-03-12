@@ -10,10 +10,10 @@ __metaclass__ = type
 from typing import Any, Callable, Dict, List, Optional
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.nd_vpc_pair_orchestrator import (
+from ansible_collections.cisco.nd.plugins.module_utils.nd_state_machine import (
     NDStateMachine,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.vpc_pair import (
+from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.nd_vpc_pair_orchestrator import (
     VpcPairOrchestrator,
 )
 from pydantic import ValidationError
