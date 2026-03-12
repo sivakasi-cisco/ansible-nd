@@ -26,6 +26,14 @@ __author__ = "Sivakami Sivaraman"
 
 from typing import Final
 
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.base_path import (
+    ApiPath,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.vpc_pair.common import (
+    build_path,
+    require_non_empty_str,
+)
+
 
 class VpcPairBasePath:
     """
@@ -60,7 +68,7 @@ class VpcPairBasePath:
     """
 
     # Root API paths
-    MANAGE_API: Final = "/api/v1/manage"
+    MANAGE_API: Final = ApiPath.MANAGE.value
 
     @classmethod
     def manage(cls, *segments: str) -> str:
@@ -84,9 +92,7 @@ class VpcPairBasePath:
         # Returns: /api/v1/manage/fabrics/Fabric1
         ```
         """
-        if not segments:
-            return cls.MANAGE_API
-        return f"{cls.MANAGE_API}/{'/'.join(segments)}"
+        return build_path(cls.MANAGE_API, *segments)
 
     @classmethod
     def fabrics(cls, fabric_name: str, *segments: str) -> str:
@@ -115,15 +121,12 @@ class VpcPairBasePath:
         # Returns: /api/v1/manage/fabrics/Fabric1/switches
         ```
         """
-        # Validate fabric_name
-        if not fabric_name or not isinstance(fabric_name, str) or not fabric_name.strip():
-            raise ValueError(
-                f"VpcPairBasePath.fabrics(): fabric_name must be a non-empty string. "
-                f"Got: {fabric_name!r} (type: {type(fabric_name).__name__})"
-            )
+        fabric_name = require_non_empty_str(
+            name="fabric_name",
+            value=fabric_name,
+            owner="VpcPairBasePath.fabrics()",
+        )
         
-        if not segments:
-            return cls.manage("fabrics", fabric_name)
         return cls.manage("fabrics", fabric_name, *segments)
 
     @classmethod
