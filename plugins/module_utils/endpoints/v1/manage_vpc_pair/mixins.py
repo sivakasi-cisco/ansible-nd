@@ -14,85 +14,39 @@
 """
 Reusable mixin classes for VPC pair endpoint models.
 
-This module provides mixin classes that can be composed to add common
-fields to endpoint models without duplication.
+This module re-exports shared endpoint mixins from
+`plugins/module_utils/endpoints/mixins.py` to avoid local duplication
+while preserving the existing import path for vPC pair code.
 """
 
 from __future__ import absolute_import, annotations, division, print_function
 
-__metaclass__ = type
 __author__ = "Sivakami Sivaraman"
 
-from typing import Optional
-
-from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
-    BaseModel,
-    Field,
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.mixins import (
+    ComponentTypeMixin,
+    FabricNameMixin,
+    FilterMixin,
+    FromClusterMixin,
+    PaginationMixin,
+    PeerSwitchIdMixin,
+    SortMixin,
+    SwitchIdMixin,
+    TicketIdMixin,
+    UseVirtualPeerLinkMixin,
+    ViewMixin,
 )
 
-
-class FabricNameMixin(BaseModel):
-    """Mixin for endpoints that require fabric_name parameter."""
-
-    fabric_name: Optional[str] = Field(default=None, min_length=1, max_length=64, description="Fabric name")
-
-
-class SwitchIdMixin(BaseModel):
-    """Mixin for endpoints that require switch_id parameter."""
-
-    switch_id: Optional[str] = Field(default=None, min_length=1, description="Switch serial number")
-
-
-class PeerSwitchIdMixin(BaseModel):
-    """Mixin for endpoints that require peer_switch_id parameter."""
-
-    peer_switch_id: Optional[str] = Field(default=None, min_length=1, description="Peer switch serial number")
-
-
-class UseVirtualPeerLinkMixin(BaseModel):
-    """Mixin for endpoints that require use_virtual_peer_link parameter."""
-
-    use_virtual_peer_link: Optional[bool] = Field(default=False, description="Indicates whether a virtual peer link is present")
-
-
-class FromClusterMixin(BaseModel):
-    """Mixin for endpoints that support fromCluster query parameter."""
-
-    from_cluster: Optional[str] = Field(default=None, description="Optional cluster name")
-
-
-class TicketIdMixin(BaseModel):
-    """Mixin for endpoints that support ticketId query parameter."""
-
-    ticket_id: Optional[str] = Field(default=None, description="Change ticket ID")
-
-
-class ComponentTypeMixin(BaseModel):
-    """Mixin for endpoints that require componentType query parameter."""
-
-    component_type: Optional[str] = Field(default=None, description="Component type for filtering response")
-
-
-class FilterMixin(BaseModel):
-    """Mixin for endpoints that support filter query parameter."""
-
-    filter: Optional[str] = Field(default=None, description="Filter expression for results")
-
-
-class PaginationMixin(BaseModel):
-    """Mixin for endpoints that support pagination parameters."""
-
-    max: Optional[int] = Field(default=None, ge=1, description="Maximum number of results")
-    offset: Optional[int] = Field(default=None, ge=0, description="Offset for pagination")
-
-
-class SortMixin(BaseModel):
-    """Mixin for endpoints that support sort parameter."""
-
-    sort: Optional[str] = Field(default=None, description="Sort field and direction (e.g., 'name:asc')")
-
-
-class ViewMixin(BaseModel):
-    """Mixin for endpoints that support view parameter."""
-
-    view: Optional[str] = Field(default=None, description="Optional view type for filtering results")
+__all__ = [
+    "FabricNameMixin",
+    "SwitchIdMixin",
+    "PeerSwitchIdMixin",
+    "UseVirtualPeerLinkMixin",
+    "FromClusterMixin",
+    "TicketIdMixin",
+    "ComponentTypeMixin",
+    "FilterMixin",
+    "PaginationMixin",
+    "SortMixin",
+    "ViewMixin",
+]

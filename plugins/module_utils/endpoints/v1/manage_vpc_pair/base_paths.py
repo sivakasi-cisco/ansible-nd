@@ -21,18 +21,29 @@ should use these path builders for consistency.
 
 from __future__ import absolute_import, division, print_function
 
-__metaclass__ = type
 __author__ = "Sivakami Sivaraman"
 
 from typing import Final
 
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.base_path import (
-    ApiPath,
-)
-from ansible_collections.cisco.nd.plugins.module_utils.vpc_pair.common import (
-    build_path,
-    require_non_empty_str,
-)
+try:
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.base_paths_manage import (
+        BasePath as _ManageBasePath,
+    )
+except Exception:
+    # Forward-compat with the smart-endpoints package layout.
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.base_path import (  # type: ignore
+        BasePath as _ManageBasePath,
+    )
+
+
+def _require_non_empty_str(name: str, value: str, owner: str) -> str:
+    """Validate required string params for endpoint path construction."""
+    if not value or not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{owner}: {name} must be a non-empty string. "
+            f"Got: {value!r} (type: {type(value).__name__})"
+        )
+    return value.strip()
 
 
 class VpcPairBasePath:
@@ -68,7 +79,7 @@ class VpcPairBasePath:
     """
 
     # Root API paths
-    MANAGE_API: Final = ApiPath.MANAGE.value
+    MANAGE_API: Final = _ManageBasePath.path()
 
     @classmethod
     def manage(cls, *segments: str) -> str:
@@ -92,7 +103,7 @@ class VpcPairBasePath:
         # Returns: /api/v1/manage/fabrics/Fabric1
         ```
         """
-        return build_path(cls.MANAGE_API, *segments)
+        return _ManageBasePath.path(*segments)
 
     @classmethod
     def fabrics(cls, fabric_name: str, *segments: str) -> str:
@@ -121,7 +132,7 @@ class VpcPairBasePath:
         # Returns: /api/v1/manage/fabrics/Fabric1/switches
         ```
         """
-        fabric_name = require_non_empty_str(
+        fabric_name = _require_non_empty_str(
             name="fabric_name",
             value=fabric_name,
             owner="VpcPairBasePath.fabrics()",
@@ -153,6 +164,11 @@ class VpcPairBasePath:
         # Returns: /api/v1/manage/fabrics/Fabric1/switches/FDO23040Q85
         ```
         """
+        switch_id = _require_non_empty_str(
+            name="switch_id",
+            value=switch_id,
+            owner="VpcPairBasePath.switches()",
+        )
         if not segments:
             return cls.fabrics(fabric_name, "switches", switch_id)
         return cls.fabrics(fabric_name, "switches", switch_id, *segments)

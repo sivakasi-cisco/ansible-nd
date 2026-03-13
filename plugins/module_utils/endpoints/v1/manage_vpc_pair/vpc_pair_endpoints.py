@@ -20,11 +20,13 @@ in the ND Manage API.
 
 from __future__ import absolute_import, division, print_function
 
-__metaclass__ = type
 __author__ = "Sivakami Sivaraman"
 
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import Literal
 
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.base import (
+    NDEndpointBaseModel,
+)
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.base_paths import (
     VpcPairBasePath,
 )
@@ -37,11 +39,11 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_p
     SortMixin,
     SwitchIdMixin,
     TicketIdMixin,
+    UseVirtualPeerLinkMixin,
     ViewMixin,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
 from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
-    BaseModel,
     ConfigDict,
     Field,
 )
@@ -59,7 +61,7 @@ class _EpVpcPairBase(
     FabricNameMixin,
     SwitchIdMixin,
     FromClusterMixin,
-    BaseModel,
+    NDEndpointBaseModel,
 ):
     """
     Base class for VPC pair details endpoints.
@@ -179,7 +181,7 @@ class EpVpcPairSupportGet(
     SwitchIdMixin,
     FromClusterMixin,
     ComponentTypeMixin,
-    BaseModel,
+    NDEndpointBaseModel,
 ):
     """
     # Summary
@@ -244,7 +246,7 @@ class EpVpcPairOverviewGet(
     SwitchIdMixin,
     FromClusterMixin,
     ComponentTypeMixin,
-    BaseModel,
+    NDEndpointBaseModel,
 ):
     """
     # Summary
@@ -308,7 +310,8 @@ class EpVpcPairRecommendationGet(
     FabricNameMixin,
     SwitchIdMixin,
     FromClusterMixin,
-    BaseModel,
+    UseVirtualPeerLinkMixin,
+    NDEndpointBaseModel,
 ):
     """
     # Summary
@@ -349,8 +352,6 @@ class EpVpcPairRecommendationGet(
     min_controller_version: str = Field(default="3.0.0", description="Minimum ND version supporting this endpoint")
     class_name: Literal["EpVpcPairRecommendationGet"] = Field(default="EpVpcPairRecommendationGet", description="Class name for backward compatibility")
 
-    use_virtual_peer_link: Optional[bool] = Field(default=None, description="Virtual peer link available")
-
     @property
     def path(self) -> str:
         """Build the endpoint path."""
@@ -373,7 +374,7 @@ class EpVpcPairConsistencyGet(
     FabricNameMixin,
     SwitchIdMixin,
     FromClusterMixin,
-    BaseModel,
+    NDEndpointBaseModel,
 ):
     """
     # Summary
@@ -434,7 +435,7 @@ class EpVpcPairsListGet(
     PaginationMixin,
     SortMixin,
     ViewMixin,
-    BaseModel,
+    NDEndpointBaseModel,
 ):
     """
     # Summary

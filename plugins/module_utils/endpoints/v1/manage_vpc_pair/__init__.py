@@ -1,6 +1,5 @@
 from __future__ import absolute_import, division, print_function
 
-__metaclass__ = type
 __copyright__ = "Copyright (c) 2026 Cisco and/or its affiliates."
 __author__ = "Neil John"
 
