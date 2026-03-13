@@ -36,6 +36,7 @@ __all__ = [
     "EpVpcPairRecommendationGet",
     "EpVpcPairConsistencyGet",
     "EpVpcPairsListGet",
+    "VpcPairEndpoints",
     # Schemas
     "VpcPairDetailsDefault",
     "VpcPairDetailsCustom",
@@ -44,6 +45,7 @@ __all__ = [
     "VpcPairBase",
     "VpcPairConsistency",
     "VpcPairRecommendation",
+    "VpcPairModel",
     # Enums
     "VerbEnum",
     "VpcActionEnum",
@@ -72,6 +74,12 @@ try:
         EpVpcPairRecommendationGet,
         EpVpcPairConsistencyGet,
         EpVpcPairsListGet,
+    )
+    from ansible_collections.cisco.nd.plugins.module_utils.vpc_pair.vpc_pair_runtime_endpoints import (
+        VpcPairEndpoints,
+    )
+    from ansible_collections.cisco.nd.plugins.module_utils.vpc_pair.vpc_pair_module_model import (
+        VpcPairModel,
     )
     from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_schemas import (
         VpcPairDetailsDefault,

@@ -11,10 +11,12 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.cisco.nd.plugins.module_utils.nd_state_machine import (
     NDStateMachine,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.vpc_pair import (
+from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.nd_vpc_pair_orchestrator import (
     VpcPairOrchestrator,
 )
-from pydantic import ValidationError
+from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
+    ValidationError,
+)
 
 
 ActionHandler = Callable[[Any], Any]

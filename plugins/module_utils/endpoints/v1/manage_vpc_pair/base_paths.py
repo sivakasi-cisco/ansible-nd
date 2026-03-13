@@ -26,12 +26,12 @@ __author__ = "Sivakami Sivaraman"
 from typing import Final
 
 try:
-    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.base_paths_manage import (
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.base_path import (
         BasePath as _ManageBasePath,
     )
 except Exception:
-    # Forward-compat with the smart-endpoints package layout.
-    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.base_path import (  # type: ignore
+    # Backward-compat for older endpoint layouts.
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.base_paths_manage import (  # type: ignore
         BasePath as _ManageBasePath,
     )
 
