@@ -15,6 +15,7 @@ except ImportError:
     )
 
 from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
+    ConfigDict,
     Field,
     field_validator,
     model_validator,
@@ -46,6 +47,17 @@ class VpcPairModel(_VpcPairBaseModel):
 
     identifiers: ClassVar[List[str]] = ["switch_id", "peer_switch_id"]
     identifier_strategy: ClassVar[Literal["composite"]] = "composite"
+    exclude_from_diff: ClassVar[List[str]] = []
+
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        use_enum_values=True,
+        validate_assignment=True,
+        populate_by_name=True,
+        validate_by_alias=True,
+        validate_by_name=True,
+        extra="ignore",
+    )
 
     switch_id: str = Field(
         alias=VpcFieldNames.SWITCH_ID,
@@ -89,6 +101,13 @@ class VpcPairModel(_VpcPairBaseModel):
     def to_payload(self) -> Dict[str, Any]:
         return self.model_dump(by_alias=True, exclude_none=True)
 
+    def to_diff_dict(self) -> Dict[str, Any]:
+        return self.model_dump(
+            by_alias=True,
+            exclude_none=True,
+            exclude=set(self.exclude_from_diff),
+        )
+
     def get_identifier_value(self):
         return tuple(sorted([self.switch_id, self.peer_switch_id]))
 
@@ -97,7 +116,34 @@ class VpcPairModel(_VpcPairBaseModel):
 
     @classmethod
     def from_config(cls, ansible_config: Dict[str, Any]) -> "VpcPairModel":
-        return cls.model_validate(ansible_config, by_name=True)
+        data = dict(ansible_config or {})
+
+        # Accept both snake_case module input and API camelCase aliases.
+        if VpcFieldNames.SWITCH_ID not in data and "switch_id" in data:
+            data[VpcFieldNames.SWITCH_ID] = data.get("switch_id")
+        if VpcFieldNames.PEER_SWITCH_ID not in data and "peer_switch_id" in data:
+            data[VpcFieldNames.PEER_SWITCH_ID] = data.get("peer_switch_id")
+        if (
+            VpcFieldNames.USE_VIRTUAL_PEER_LINK not in data
+            and "use_virtual_peer_link" in data
+        ):
+            data[VpcFieldNames.USE_VIRTUAL_PEER_LINK] = data.get("use_virtual_peer_link")
+        if VpcFieldNames.VPC_PAIR_DETAILS not in data and "vpc_pair_details" in data:
+            data[VpcFieldNames.VPC_PAIR_DETAILS] = data.get("vpc_pair_details")
+
+        return cls.model_validate(data, by_alias=True, by_name=True)
+
+    def merge(self, other_model: "VpcPairModel") -> "VpcPairModel":
+        if not isinstance(other_model, type(self)):
+            raise TypeError(
+                "VpcPairModel.merge requires both models to be the same type"
+            )
+
+        for field, value in other_model:
+            if value is None:
+                continue
+            setattr(self, field, value)
+        return self
 
     @classmethod
     def from_response(cls, response: Dict[str, Any]) -> "VpcPairModel":
