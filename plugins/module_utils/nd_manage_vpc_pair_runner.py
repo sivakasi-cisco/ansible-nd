@@ -7,7 +7,7 @@ from __future__ import absolute_import, division, print_function
 
 from typing import Any, Dict
 
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (
     VpcFieldNames,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_common import (
@@ -95,5 +95,4 @@ def run_vpc_module(nrm) -> Dict[str, Any]:
 
 
 # ===== Module Entry Point =====
-
 

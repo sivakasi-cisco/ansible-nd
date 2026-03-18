@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 
-# Copyright: (c) 2026, Sivakami S <sivakasi@cisco.com>
+# Copyright: (c) 2026, Sivakami Sivaraman sivakasi@cisco.com
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import absolute_import, division, print_function
 
 import traceback
 from typing import Any, Dict, List
 
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_resources import (
+from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_exceptions import (
     VpcPairResourceError,
 )
 
@@ -80,5 +79,4 @@ def _is_update_needed(want: Dict[str, Any], have: Dict[str, Any]) -> bool:
     except Exception:
         # Fallback to simple comparison if DeepDiff fails
         return want != have
-
 

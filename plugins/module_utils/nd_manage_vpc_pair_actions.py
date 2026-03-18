@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 
-# Copyright: (c) 2026, Sivakami S <sivakasi@cisco.com>
+# Copyright: (c) 2026, Sivakami Sivaraman sivakasi@cisco.com
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import absolute_import, division, print_function
 
 from typing import Any, Dict, Optional
 
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (
     ComponentTypeSupportEnum,
     VpcActionEnum,
     VpcFieldNames,
@@ -24,13 +23,13 @@ from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_valida
     _validate_switches_exist_in_fabric,
     _validate_vpc_pair_deletion,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_resources import (
+from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_exceptions import (
     VpcPairResourceError,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_runtime_endpoints import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_runtime_endpoints import (
     VpcPairEndpoints,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_runtime_payloads import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_runtime_payloads import (
     _build_vpc_pair_payload,
     _get_api_field_value,
 )
@@ -460,4 +459,3 @@ def custom_vpc_delete(nrm) -> None:
             path=path,
             exception_type=type(e).__name__
         )
-
