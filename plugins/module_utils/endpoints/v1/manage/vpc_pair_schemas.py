@@ -11,6 +11,10 @@ Backward-compatible export surface for vPC pair schemas.
 Primary source of truth lives in `plugins/module_utils/models/manage_vpc_pair/vpc_pair_models.py`.
 This module also provides local fallback models for AnsiballZ runtimes where
 `module_utils/models/manage_vpc_pair` files may not be packaged.
+
+Note:
+- This file defines schema/model types, not endpoint paths.
+- Endpoint path mappings are documented in `vpc_pair_endpoints.py`.
 """
 
 from typing import Any, Dict, List, Optional, Literal, Annotated

@@ -13,27 +13,27 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.query_params im
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (
     ComponentTypeSupportEnum,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches_vpc_pair import (
     EpVpcPairGet,
     EpVpcPairPut,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_consistency import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches_vpc_pair_consistency import (
     EpVpcPairConsistencyGet,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_overview import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches_vpc_pair_overview import (
     EpVpcPairOverviewGet,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_recommendation import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches_vpc_pair_recommendation import (
     EpVpcPairRecommendationGet,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_support import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches_vpc_pair_support import (
     EpVpcPairSupportGet,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pairs import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_vpc_pairs import (
     EpVpcPairsListGet,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.base_path import (
-    BasePath,
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_base_paths import (
+    VpcPairBasePath,
 )
 
 
@@ -50,7 +50,19 @@ class _ForceShowRunQueryParams(EndpointQueryParams):
 
 
 class VpcPairEndpoints:
-    """Centralized endpoint builders for vPC pair runtime operations."""
+    """
+    Centralized endpoint builders for vPC pair runtime operations.
+
+    Runtime helper -> API path:
+    - vpc_pairs_list/vpc_pair_base -> /api/v1/manage/fabrics/{fabricName}/vpcPairs
+    - switch_vpc_pair/vpc_pair_put -> /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPair
+    - switch_vpc_support -> /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairSupport
+    - switch_vpc_overview -> /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairOverview
+    - switch_vpc_recommendations -> /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairRecommendation
+    - switch_vpc_consistency -> /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairConsistency
+    - fabric_config_save -> /api/v1/manage/fabrics/{fabricName}/actions/configSave
+    - fabric_config_deploy -> /api/v1/manage/fabrics/{fabricName}/actions/deploy
+    """
 
     NDFC_BASE = "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest"
     MANAGE_BASE = "/api/v1/manage"
@@ -90,7 +102,7 @@ class VpcPairEndpoints:
 
     @staticmethod
     def fabric_switches(fabric_name: str) -> str:
-        return BasePath.path("fabrics", fabric_name, "switches")
+        return VpcPairBasePath.fabrics(fabric_name, "switches")
 
     @staticmethod
     def switch_vpc_pair(fabric_name: str, switch_id: str) -> str:
@@ -131,11 +143,11 @@ class VpcPairEndpoints:
 
     @staticmethod
     def fabric_config_save(fabric_name: str) -> str:
-        return BasePath.path("fabrics", fabric_name, "actions", "configSave")
+        return VpcPairBasePath.fabrics(fabric_name, "actions", "configSave")
 
     @staticmethod
     def fabric_config_deploy(fabric_name: str, force_show_run: bool = True) -> str:
-        base_path = BasePath.path("fabrics", fabric_name, "actions", "deploy")
+        base_path = VpcPairBasePath.fabrics(fabric_name, "actions", "deploy")
         query_params = _ForceShowRunQueryParams(
             force_show_run=True if force_show_run else None
         )

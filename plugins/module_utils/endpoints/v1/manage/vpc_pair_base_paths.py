@@ -17,6 +17,14 @@ Centralized base paths for VPC pair API endpoints.
 This module provides a single location to manage all VPC pair API base paths,
 allowing easy modification when API paths change. All endpoint classes
 should use these path builders for consistency.
+
+Path roots used by vPC endpoints:
+- /api/v1/manage/fabrics/{fabricName}/vpcPairs
+- /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPair
+- /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairSupport
+- /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairOverview
+- /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairRecommendation
+- /api/v1/manage/fabrics/{fabricName}/switches/{switchId}/vpcPairConsistency
 """
 
 from __future__ import absolute_import, division, print_function

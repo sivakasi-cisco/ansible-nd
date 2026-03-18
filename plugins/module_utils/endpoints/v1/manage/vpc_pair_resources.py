@@ -21,6 +21,14 @@ from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_except
     VpcPairResourceError,
 )
 
+"""
+State-machine resource service for nd_manage_vpc_pair.
+
+Note:
+- This file does not define endpoint paths directly.
+- Runtime endpoint path usage is centralized in `vpc_pair_runtime_endpoints.py`.
+"""
+
 
 RunStateHandler = Callable[[Any], Dict[str, Any]]
 DeployHandler = Callable[[Any, str, Dict[str, Any]], Dict[str, Any]]

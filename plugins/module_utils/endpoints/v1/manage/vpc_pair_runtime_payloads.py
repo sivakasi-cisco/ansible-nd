@@ -12,6 +12,14 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_p
     VpcFieldNames,
 )
 
+"""
+Payload helpers for vPC runtime operations.
+
+Note:
+- This file builds request/response payload structures only.
+- Endpoint paths are resolved in `vpc_pair_runtime_endpoints.py`.
+"""
+
 
 def _get_template_config(vpc_pair_model) -> Optional[Dict[str, Any]]:
     """Extract template configuration from a vPC pair model if present."""

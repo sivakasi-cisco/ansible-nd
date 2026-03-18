@@ -19,6 +19,10 @@ Enums for VPC pair management.
 
 This module provides enumeration types used throughout the VPC pair
 management implementation.
+
+Note:
+- This file does not define API paths.
+- Endpoint path mappings are documented in `vpc_pair_endpoints.py`.
 """
 
 from __future__ import absolute_import, division, print_function
