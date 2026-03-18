@@ -5,6 +5,8 @@
 from __future__ import absolute_import, division, print_function
 
 # Backward-compatible import path for callers still using nd_ prefix.
-from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.vpc_pair import (  # noqa: F401
+from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.manage_vpc_pair import (
     VpcPairOrchestrator,
 )
+
+__all__ = ("VpcPairOrchestrator",)

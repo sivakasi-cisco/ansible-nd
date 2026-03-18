@@ -17,6 +17,9 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manag
     EpVpcPairGet,
     EpVpcPairPut,
 )
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches import (
+    EpFabricSwitchesGet,
+)
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches_vpc_pair_consistency import (
     EpVpcPairConsistencyGet,
 )
@@ -32,8 +35,11 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manag
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_vpc_pairs import (
     EpVpcPairsListGet,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_base_paths import (
-    VpcPairBasePath,
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_actions_config_save import (
+    EpFabricConfigSavePost,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_actions_deploy import (
+    EpFabricDeployPost,
 )
 
 
@@ -64,19 +70,6 @@ class VpcPairEndpoints:
     - fabric_config_deploy -> /api/v1/manage/fabrics/{fabricName}/actions/deploy
     """
 
-    NDFC_BASE = "/appcenter/cisco/ndfc/api/v1/lan-fabric/rest"
-    MANAGE_BASE = "/api/v1/manage"
-    VPC_PAIR_BASE = f"{NDFC_BASE}/vpcpair/fabrics/{{fabric_name}}"
-    VPC_PAIR_SWITCH = f"{NDFC_BASE}/vpcpair/fabrics/{{fabric_name}}/switches/{{switch_id}}"
-    FABRIC_CONFIG_SAVE = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/actions/configSave"
-    FABRIC_CONFIG_DEPLOY = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/actions/deploy"
-    FABRIC_SWITCHES = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/switches"
-    SWITCH_VPC_PAIR = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/switches/{{switch_id}}/vpcPair"
-    SWITCH_VPC_RECOMMENDATIONS = (
-        f"{MANAGE_BASE}/fabrics/{{fabric_name}}/switches/{{switch_id}}/vpcPairRecommendation"
-    )
-    SWITCH_VPC_OVERVIEW = f"{MANAGE_BASE}/fabrics/{{fabric_name}}/switches/{{switch_id}}/vpcPairOverview"
-
     @staticmethod
     def _append_query(path: str, *query_groups: EndpointQueryParams) -> str:
         composite_params = CompositeQueryParams()
@@ -102,7 +95,8 @@ class VpcPairEndpoints:
 
     @staticmethod
     def fabric_switches(fabric_name: str) -> str:
-        return VpcPairBasePath.fabrics(fabric_name, "switches")
+        endpoint = EpFabricSwitchesGet(fabric_name=fabric_name)
+        return endpoint.path
 
     @staticmethod
     def switch_vpc_pair(fabric_name: str, switch_id: str) -> str:
@@ -143,11 +137,13 @@ class VpcPairEndpoints:
 
     @staticmethod
     def fabric_config_save(fabric_name: str) -> str:
-        return VpcPairBasePath.fabrics(fabric_name, "actions", "configSave")
+        endpoint = EpFabricConfigSavePost(fabric_name=fabric_name)
+        return endpoint.path
 
     @staticmethod
     def fabric_config_deploy(fabric_name: str, force_show_run: bool = True) -> str:
-        base_path = VpcPairBasePath.fabrics(fabric_name, "actions", "deploy")
+        endpoint = EpFabricDeployPost(fabric_name=fabric_name)
+        base_path = endpoint.path
         query_params = _ForceShowRunQueryParams(
             force_show_run=True if force_show_run else None
         )

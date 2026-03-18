@@ -540,8 +540,8 @@
       - result.failed == false
   tags: merge
 
-# TC12 - dry_run should not apply configuration changes
-- name: MERGE - TC12 - DELETE - Ensure vPC pair is absent before dry_run test
+# TC12 - check_mode should not apply configuration changes
+- name: MERGE - TC12 - DELETE - Ensure vPC pair is absent before check_mode test
   cisco.nd.nd_manage_vpc_pair:
     fabric_name: "{{ test_fabric }}"
     state: deleted
@@ -551,22 +551,22 @@
   ignore_errors: true
   tags: merge
 
-- name: MERGE - TC12 - MERGE - Run dry_run create for vPC pair
+- name: MERGE - TC12 - MERGE - Run check_mode create for vPC pair
   cisco.nd.nd_manage_vpc_pair:
     fabric_name: "{{ test_fabric }}"
     state: merged
-    dry_run: true
     config: "{{ nd_vpc_pair_merge_full_conf }}"
+  check_mode: true
   register: result
   tags: merge
 
-- name: MERGE - TC12 - ASSERT - Verify dry_run invocation succeeded
+- name: MERGE - TC12 - ASSERT - Verify check_mode invocation succeeded
   ansible.builtin.assert:
     that:
       - result.failed == false
   tags: merge
 
-- name: MERGE - TC12 - GATHER - Verify dry_run did not create vPC pair
+- name: MERGE - TC12 - GATHER - Verify check_mode did not create vPC pair
   cisco.nd.nd_manage_vpc_pair:
     state: gathered
     fabric_name: "{{ test_fabric }}"
@@ -576,7 +576,7 @@
   register: verify_result
   tags: merge
 
-- name: MERGE - TC12 - VALIDATE - Confirm no persistent changes from dry_run
+- name: MERGE - TC12 - VALIDATE - Confirm no persistent changes from check_mode
   cisco.nd.tests.integration.nd_vpc_pair_validate:
     gathered_data: "{{ verify_result }}"
     expected_data: []

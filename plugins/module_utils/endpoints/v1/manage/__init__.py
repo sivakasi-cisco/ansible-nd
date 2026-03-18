@@ -19,6 +19,15 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manag
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_vpc_pairs import (
     EpVpcPairsListGet,
 )
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches import (
+    EpFabricSwitchesGet,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_actions_config_save import (
+    EpFabricConfigSavePost,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_actions_deploy import (
+    EpFabricDeployPost,
+)
 
 __all__ = [
     "EpVpcPairGet",
@@ -28,4 +37,7 @@ __all__ = [
     "EpVpcPairRecommendationGet",
     "EpVpcPairConsistencyGet",
     "EpVpcPairsListGet",
+    "EpFabricSwitchesGet",
+    "EpFabricConfigSavePost",
+    "EpFabricDeployPost",
 ]

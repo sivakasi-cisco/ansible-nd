@@ -22,7 +22,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat im
     field_validator,
     model_validator,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (
     VpcFieldNames,
 )
 
@@ -32,7 +32,7 @@ try:
         VpcPairDetailsCustom,
     )
 except ImportError:
-    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_schemas import (
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_schemas import (
         VpcPairDetailsDefault,
         VpcPairDetailsCustom,
     )
