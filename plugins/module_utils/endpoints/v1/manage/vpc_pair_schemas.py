@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 
-# Copyright: (c) 2025, Sivakami Sivaraman <sivakasi@cisco.com>
+# Copyright: (c) 2026, Sivakami Sivaraman sivakasi@cisco.com
 
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import absolute_import, division, print_function
 
 """
 Backward-compatible export surface for vPC pair schemas.
 
-Primary source of truth lives in `plugins/models/vpc_pair_models.py`.
+Primary source of truth lives in `plugins/module_utils/models/manage_vpc_pair/vpc_pair_models.py`.
 This module also provides local fallback models for AnsiballZ runtimes where
-`plugins/models` files may not be packaged.
+`module_utils/models/manage_vpc_pair` files may not be packaged.
 """
 
 from typing import Any, Dict, List, Optional, Literal, Annotated
@@ -24,7 +23,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat im
 )
 
 try:
-    from ansible_collections.cisco.nd.plugins.models.base import (  # noqa: F401
+    from ansible_collections.cisco.nd.plugins.module_utils.models.manage_vpc_pair.base import (  # noqa: F401
         coerce_str_to_int,
         coerce_to_bool,
         coerce_list_of_str,
@@ -33,10 +32,12 @@ try:
         FlexibleListStr,
         NDVpcPairBaseModel,
     )
-    from ansible_collections.cisco.nd.plugins.models.nested import NDVpcPairNestedModel  # noqa: F401
-    from ansible_collections.cisco.nd.plugins.models.vpc_pair_models import *  # noqa: F401,F403
+    from ansible_collections.cisco.nd.plugins.module_utils.models.manage_vpc_pair.nested import (  # noqa: F401
+        NDVpcPairNestedModel,
+    )
+    from ansible_collections.cisco.nd.plugins.module_utils.models.manage_vpc_pair.vpc_pair_models import *  # noqa: F401,F403
 except Exception:
-    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (  # noqa: F401
+    from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (  # noqa: F401
         KeepAliveVrfEnum,
     )
 

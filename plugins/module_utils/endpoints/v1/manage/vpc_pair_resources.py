@@ -1,36 +1,30 @@
 # -*- coding: utf-8 -*-
 
-# Copyright: (c) 2026, Sivakami S <sivakasi@cisco.com>
+# Copyright: (c) 2026, Sivakami Sivaraman sivakasi@cisco.com
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import absolute_import, division, print_function
 
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.cisco.nd.plugins.module_utils.nd_state_machine import (
     NDStateMachine,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.nd_vpc_pair_orchestrator import (
+from ansible_collections.cisco.nd.plugins.module_utils.orchestrators.vpc_pair import (
     VpcPairOrchestrator,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
     ValidationError,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_exceptions import (
+    VpcPairResourceError,
 )
 
 
 RunStateHandler = Callable[[Any], Dict[str, Any]]
 DeployHandler = Callable[[Any, str, Dict[str, Any]], Dict[str, Any]]
 NeedsDeployHandler = Callable[[Dict[str, Any], Any], bool]
-
-
-class VpcPairResourceError(Exception):
-    """Structured error raised by vpc_pair runtime layers."""
-
-    def __init__(self, msg: str, **details: Any):
-        super().__init__(msg)
-        self.msg = msg
-        self.details = details
 
 
 class VpcPairStateMachine(NDStateMachine):
@@ -67,6 +61,7 @@ class VpcPairStateMachine(NDStateMachine):
         """
         Build final result payload compatible with nd_manage_vpc_pair runtime.
         """
+        self._refresh_after_state()
         self.output.assign(
             after=getattr(self, "existing", None),
             before=getattr(self, "before", None),
@@ -78,9 +73,121 @@ class VpcPairStateMachine(NDStateMachine):
         formatted.setdefault("current", formatted.get("after", []))
         formatted.setdefault("response", [])
         formatted.setdefault("result", [])
+        class_diff = self._build_class_diff()
+        formatted["created"] = class_diff["created"]
+        formatted["deleted"] = class_diff["deleted"]
+        formatted["updated"] = class_diff["updated"]
+        formatted["class_diff"] = class_diff
         if self.logs and "logs" not in formatted:
             formatted["logs"] = self.logs
         self.result = formatted
+
+    def _refresh_after_state(self) -> None:
+        """
+        Optionally refresh the final "after" state from controller query.
+
+        Enabled by default for write states to better reflect live controller
+        state. Can be disabled for performance-sensitive runs.
+        """
+        state = self.module.params.get("state")
+        if state not in ("merged", "replaced", "overridden", "deleted"):
+            return
+        if self.module.check_mode:
+            return
+        if not self.module.params.get("refresh_after_apply", True):
+            return
+
+        refresh_timeout = self.module.params.get("refresh_after_timeout")
+        had_original_timeout = "query_timeout" in self.module.params
+        original_timeout = self.module.params.get("query_timeout")
+
+        try:
+            if refresh_timeout is not None:
+                self.module.params["query_timeout"] = refresh_timeout
+            response_data = self.model_orchestrator.query_all()
+            self.existing = self.nd_config_collection.from_api_response(
+                response_data=response_data,
+                model_class=self.model_class,
+            )
+        except Exception as exc:
+            self.module.warn(
+                f"Failed to refresh final after-state from controller query: {exc}"
+            )
+        finally:
+            if refresh_timeout is not None:
+                if had_original_timeout:
+                    self.module.params["query_timeout"] = original_timeout
+                else:
+                    self.module.params.pop("query_timeout", None)
+
+    @staticmethod
+    def _identifier_to_key(identifier: Any) -> str:
+        """
+        Build a stable key for de-duplicating identifiers in class diff output.
+        """
+        try:
+            return json.dumps(identifier, sort_keys=True, default=str)
+        except Exception:
+            return str(identifier)
+
+    @staticmethod
+    def _extract_changed_properties(log_entry: Dict[str, Any]) -> List[str]:
+        """
+        Best-effort changed-property extraction for update operations.
+        """
+        before = log_entry.get("before")
+        after = log_entry.get("after")
+        sent_payload = log_entry.get("sent_payload")
+
+        changed = []
+        if isinstance(before, dict) and isinstance(after, dict):
+            all_keys = set(before.keys()) | set(after.keys())
+            changed = [key for key in all_keys if before.get(key) != after.get(key)]
+
+        if not changed and isinstance(sent_payload, dict):
+            changed = list(sent_payload.keys())
+
+        return sorted(set(changed))
+
+    def _build_class_diff(self) -> Dict[str, List[Any]]:
+        """
+        Build class-level diff with created/deleted/updated entries.
+        """
+        created: List[Any] = []
+        deleted: List[Any] = []
+        updated: List[Dict[str, Any]] = []
+
+        created_seen = set()
+        deleted_seen = set()
+        updated_map: Dict[str, Dict[str, Any]] = {}
+
+        for log_entry in self.logs:
+            status = log_entry.get("status")
+            identifier = log_entry.get("identifier")
+            key = self._identifier_to_key(identifier)
+
+            if status == "created":
+                if key not in created_seen:
+                    created_seen.add(key)
+                    created.append(identifier)
+            elif status == "deleted":
+                if key not in deleted_seen:
+                    deleted_seen.add(key)
+                    deleted.append(identifier)
+            elif status == "updated":
+                changed_props = self._extract_changed_properties(log_entry)
+                entry = updated_map.get(key)
+                if entry is None:
+                    entry = {"identifier": identifier}
+                    if changed_props:
+                        entry["changed_properties"] = changed_props
+                    updated_map[key] = entry
+                elif changed_props:
+                    merged = set(entry.get("changed_properties", [])) | set(changed_props)
+                    entry["changed_properties"] = sorted(merged)
+
+        updated.extend(updated_map.values())
+        return {"created": created, "deleted": deleted, "updated": updated}
 
     def manage_state(
         self,
