@@ -10,7 +10,9 @@ __metaclass__ = type
 
 from typing import Any, Dict, List, ClassVar
 from typing_extensions import Self
-from ansible_collections.cisco.nd.plugins.models.base import NDVpcPairBaseModel
+from ansible_collections.cisco.nd.plugins.module_utils.models.manage_vpc_pair.base import (
+    NDVpcPairBaseModel,
+)
 
 
 class NDVpcPairNestedModel(NDVpcPairBaseModel):

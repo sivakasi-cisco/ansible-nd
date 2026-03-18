@@ -27,13 +27,15 @@ from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat im
     field_validator,
     model_validator,
 )
-from ansible_collections.cisco.nd.plugins.models.base import (
+from ansible_collections.cisco.nd.plugins.module_utils.models.manage_vpc_pair.base import (
     FlexibleBool,
     FlexibleInt,
     FlexibleListStr,
     NDVpcPairBaseModel,
 )
-from ansible_collections.cisco.nd.plugins.models.nested import NDVpcPairNestedModel
+from ansible_collections.cisco.nd.plugins.module_utils.models.manage_vpc_pair.nested import (
+    NDVpcPairNestedModel,
+)
 
 # Import enums from centralized location
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.enums import (
