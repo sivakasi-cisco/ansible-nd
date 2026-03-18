@@ -19,7 +19,6 @@ from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat im
 )
 
 
-ActionHandler = Callable[[Any], Any]
 RunStateHandler = Callable[[Any], Dict[str, Any]]
 DeployHandler = Callable[[Any, str, Dict[str, Any]], Dict[str, Any]]
 NeedsDeployHandler = Callable[[Dict[str, Any], Any], bool]
@@ -104,7 +103,7 @@ class VpcPairStateMachine(NDStateMachine):
             parsed_items = []
             for config in self.ansible_config:
                 try:
-                    parsed_items.append(self.model_class.model_validate(config))
+                    parsed_items.append(self.model_class.from_config(config))
                 except ValidationError as e:
                     raise VpcPairResourceError(
                         msg=f"Invalid configuration: {e}",
@@ -296,32 +295,16 @@ class VpcPairResourceService:
     def __init__(
         self,
         module: AnsibleModule,
-        model_class: Any,
-        actions: Dict[str, ActionHandler],
         run_state_handler: RunStateHandler,
         deploy_handler: DeployHandler,
         needs_deployment_handler: NeedsDeployHandler,
     ):
         self.module = module
-        self.model_class = model_class
-        self.actions = actions
         self.run_state_handler = run_state_handler
         self.deploy_handler = deploy_handler
         self.needs_deployment_handler = needs_deployment_handler
 
-    def _prime_runtime_context(self) -> None:
-        required_actions = {"query_all", "create", "update", "delete"}
-        if not required_actions.issubset(set(self.actions)):
-            raise ValueError(
-                "Invalid vPC action map. Required keys: query_all, create, update, delete"
-            )
-        # Store runtime objects on module attributes (not params) to avoid
-        # JSON-serialization issues in httpapi connection parameter handling.
-        self.module._vpc_pair_model_class = self.model_class
-        self.module._vpc_pair_actions = self.actions
-
     def execute(self, fabric_name: str) -> Dict[str, Any]:
-        self._prime_runtime_context()
         nd_manage_vpc_pair = VpcPairStateMachine(module=self.module)
         result = self.run_state_handler(nd_manage_vpc_pair)
 

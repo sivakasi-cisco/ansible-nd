@@ -8,6 +8,17 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 from typing import Any, Optional
+from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage_vpc_pair.vpc_pair_module_model import (
+    VpcPairModel,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_actions import (
+    custom_vpc_create,
+    custom_vpc_delete,
+    custom_vpc_update,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_query import (
+    custom_vpc_query_all,
+)
 
 from ansible.module_utils.basic import AnsibleModule
 
@@ -26,7 +37,7 @@ class VpcPairOrchestrator:
     Delegates CRUD operations to injected vPC action handlers.
     """
 
-    model_class = None
+    model_class = VpcPairModel
 
     def __init__(
         self,
@@ -50,18 +61,6 @@ class VpcPairOrchestrator:
         self.sender = sender
         self.state_machine = None
 
-        self.model_class = getattr(self.module, "_vpc_pair_model_class", None)
-        self.actions = getattr(self.module, "_vpc_pair_actions", {})
-
-        if self.model_class is None:
-            raise ValueError("Missing _vpc_pair_model_class in module params")
-        required_actions = {"query_all", "create", "update", "delete"}
-        if not required_actions.issubset(set(self.actions)):
-            raise ValueError(
-                "Missing required _vpc_pair_actions. Required keys: "
-                "query_all, create, update, delete"
-            )
-
     def bind_state_machine(self, state_machine: Any) -> None:
         self.state_machine = state_machine
 
@@ -71,22 +70,22 @@ class VpcPairOrchestrator:
             if self.state_machine is not None
             else _VpcPairQueryContext(self.module)
         )
-        return self.actions["query_all"](context)
+        return custom_vpc_query_all(context)
 
     def create(self, model_instance, **kwargs):
         _ = (model_instance, kwargs)
         if self.state_machine is None:
             raise RuntimeError("VpcPairOrchestrator is not bound to a state machine")
-        return self.actions["create"](self.state_machine)
+        return custom_vpc_create(self.state_machine)
 
     def update(self, model_instance, **kwargs):
         _ = (model_instance, kwargs)
         if self.state_machine is None:
             raise RuntimeError("VpcPairOrchestrator is not bound to a state machine")
-        return self.actions["update"](self.state_machine)
+        return custom_vpc_update(self.state_machine)
 
     def delete(self, model_instance, **kwargs):
         _ = (model_instance, kwargs)
         if self.state_machine is None:
             raise RuntimeError("VpcPairOrchestrator is not bound to a state machine")
-        return self.actions["delete"](self.state_machine)
+        return custom_vpc_delete(self.state_machine)

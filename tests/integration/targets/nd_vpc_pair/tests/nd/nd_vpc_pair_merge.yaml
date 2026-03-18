@@ -296,7 +296,7 @@
 - name: MERGE - TC4b - ASSERT - Check if delete successfully
   ansible.builtin.assert:
     that:
-        - result.failed == false
+      - result.failed == false
   when: test_fabric_type == "LANClassic"
   tags: merge
 
@@ -311,7 +311,7 @@
 - name: MERGE - TC5 - ASSERT - Check if changed flag is true
   ansible.builtin.assert:
     that:
-        - result.failed == false
+      - result.failed == false
   tags: merge
 
 - name: MERGE - TC5 - GATHER - Get vPC pair state in ND
