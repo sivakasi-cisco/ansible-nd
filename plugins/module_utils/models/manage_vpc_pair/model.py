@@ -17,6 +17,7 @@ except ImportError:
     )
 
 from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat import (
+    BaseModel,
     ConfigDict,
     Field,
     field_validator,
@@ -150,3 +151,233 @@ class VpcPairModel(_VpcPairBaseModel):
             ),
         }
         return cls.model_validate(data)
+
+    @classmethod
+    def get_argument_spec(cls) -> Dict[str, Any]:
+        """
+        Return Ansible argument_spec for nd_manage_vpc_pair.
+
+        Backward-compatible wrapper around the dedicated playbook config model.
+        """
+        return VpcPairPlaybookConfigModel.get_argument_spec()
+
+
+class VpcPairPlaybookItemModel(BaseModel):
+    """
+    One item under playbook `config` for nd_manage_vpc_pair.
+    """
+
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        use_enum_values=True,
+        validate_assignment=True,
+        populate_by_name=True,
+        validate_by_alias=True,
+        validate_by_name=True,
+        extra="ignore",
+    )
+
+    peer1_switch_id: str = Field(
+        alias="switch_id",
+        description="Peer-1 switch serial number",
+        min_length=3,
+        max_length=64,
+    )
+    peer2_switch_id: str = Field(
+        alias="peer_switch_id",
+        description="Peer-2 switch serial number",
+        min_length=3,
+        max_length=64,
+    )
+    use_virtual_peer_link: bool = Field(
+        default=True,
+        description="Virtual peer link enabled",
+    )
+    vpc_pair_details: Optional[Union[VpcPairDetailsDefault, VpcPairDetailsCustom]] = Field(
+        default=None,
+        discriminator="type",
+        alias=VpcFieldNames.VPC_PAIR_DETAILS,
+        description="VPC pair configuration details (default or custom template)",
+    )
+
+    @field_validator("peer1_switch_id", "peer2_switch_id")
+    @classmethod
+    def validate_switch_id_format(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Switch ID cannot be empty or whitespace")
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_different_switches(self) -> "VpcPairPlaybookItemModel":
+        if self.peer1_switch_id == self.peer2_switch_id:
+            raise ValueError(
+                "peer1_switch_id and peer2_switch_id must be different: "
+                f"{self.peer1_switch_id}"
+            )
+        return self
+
+    def to_runtime_config(self) -> Dict[str, Any]:
+        """
+        Normalize playbook keys into runtime keys consumed by state machine code.
+        """
+        switch_id = self.peer1_switch_id
+        peer_switch_id = self.peer2_switch_id
+        use_virtual_peer_link = self.use_virtual_peer_link
+        vpc_pair_details = self.vpc_pair_details
+        return {
+            "switch_id": switch_id,
+            "peer_switch_id": peer_switch_id,
+            "use_virtual_peer_link": use_virtual_peer_link,
+            "vpc_pair_details": (
+                vpc_pair_details.model_dump(by_alias=True, exclude_none=True)
+                if vpc_pair_details is not None
+                else None
+            ),
+            VpcFieldNames.SWITCH_ID: switch_id,
+            VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
+            VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_virtual_peer_link,
+            VpcFieldNames.VPC_PAIR_DETAILS: (
+                vpc_pair_details.model_dump(by_alias=True, exclude_none=True)
+                if vpc_pair_details is not None
+                else None
+            ),
+        }
+
+
+class VpcPairPlaybookConfigModel(BaseModel):
+    """
+    Top-level playbook configuration model for nd_manage_vpc_pair.
+    """
+
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        use_enum_values=True,
+        validate_assignment=True,
+        populate_by_name=True,
+        validate_by_alias=True,
+        validate_by_name=True,
+        extra="ignore",
+    )
+
+    state: Literal["merged", "replaced", "deleted", "overridden", "gathered"] = Field(
+        default="merged",
+        description="Desired state for vPC pair configuration",
+    )
+    fabric_name: str = Field(description="Fabric name")
+    deploy: bool = Field(default=False, description="Deploy after configuration changes")
+    force: bool = Field(
+        default=False,
+        description="Force deletion without pre-deletion safety checks",
+    )
+    api_timeout: int = Field(
+        default=30,
+        description="API request timeout in seconds for write operations",
+    )
+    query_timeout: int = Field(
+        default=10,
+        description="API request timeout in seconds for query/recommendation operations",
+    )
+    refresh_after_apply: bool = Field(
+        default=True,
+        description="Refresh final after-state with a post-apply query",
+    )
+    refresh_after_timeout: Optional[int] = Field(
+        default=None,
+        description="Optional timeout for post-apply refresh query",
+    )
+    suppress_previous: bool = Field(
+        default=False,
+        description="Skip initial before-state query (merged state only)",
+    )
+    suppress_verification: bool = Field(
+        default=False,
+        description="Skip final after-state refresh query",
+    )
+    config: List[VpcPairPlaybookItemModel] = Field(
+        default_factory=list,
+        description="List of vPC pair configurations",
+    )
+
+    @classmethod
+    def get_argument_spec(cls) -> Dict[str, Any]:
+        """
+        Return Ansible argument_spec for nd_manage_vpc_pair.
+        """
+        return dict(
+            state=dict(
+                type="str",
+                default="merged",
+                choices=["merged", "replaced", "deleted", "overridden", "gathered"],
+            ),
+            fabric_name=dict(type="str", required=True),
+            deploy=dict(type="bool", default=False),
+            force=dict(
+                type="bool",
+                default=False,
+                description=(
+                    "Force deletion without pre-deletion validation "
+                    "(bypasses safety checks)"
+                ),
+            ),
+            api_timeout=dict(
+                type="int",
+                default=30,
+                description=(
+                    "API request timeout in seconds for primary operations"
+                ),
+            ),
+            query_timeout=dict(
+                type="int",
+                default=10,
+                description=(
+                    "API request timeout in seconds for query/recommendation "
+                    "operations"
+                ),
+            ),
+            refresh_after_apply=dict(
+                type="bool",
+                default=True,
+                description=(
+                    "Refresh final after-state by querying controller "
+                    "after write operations"
+                ),
+            ),
+            refresh_after_timeout=dict(
+                type="int",
+                required=False,
+                description=(
+                    "Optional timeout in seconds for post-apply after-state "
+                    "refresh query"
+                ),
+            ),
+            suppress_previous=dict(
+                type="bool",
+                default=False,
+                description=(
+                    "Skip initial controller query for before/diff baseline. "
+                    "Supported only with state=merged."
+                ),
+            ),
+            suppress_verification=dict(
+                type="bool",
+                default=False,
+                description=(
+                    "Skip post-apply controller query for after-state "
+                    "verification (alias for refresh_after_apply=false)."
+                ),
+            ),
+            config=dict(
+                type="list",
+                elements="dict",
+                options=dict(
+                    peer1_switch_id=dict(
+                        type="str", required=True, aliases=["switch_id"]
+                    ),
+                    peer2_switch_id=dict(
+                        type="str", required=True, aliases=["peer_switch_id"]
+                    ),
+                    use_virtual_peer_link=dict(type="bool", default=True),
+                    vpc_pair_details=dict(type="dict"),
+                ),
+            ),
+        )
