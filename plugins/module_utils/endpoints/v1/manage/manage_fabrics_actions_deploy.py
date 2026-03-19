@@ -15,11 +15,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.base import (
 )
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.mixins import (
     FabricNameMixin,
-    FilterMixin,
     FromClusterMixin,
-    PaginationMixin,
-    SortMixin,
-    ViewMixin,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.base_path import (
     BasePath,
@@ -27,37 +23,33 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.base_
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
 
 # API path covered by this file:
-# /api/v1/manage/fabrics/{fabricName}/vpcPairs
+# /api/v1/manage/fabrics/{fabricName}/actions/deploy
 COMMON_CONFIG = ConfigDict(validate_assignment=True)
 
 
-class EpVpcPairsListGet(
+class EpFabricDeployPost(
     FabricNameMixin,
     FromClusterMixin,
-    FilterMixin,
-    PaginationMixin,
-    SortMixin,
-    ViewMixin,
     NDEndpointBaseModel,
 ):
     """
-    GET /api/v1/manage/fabrics/{fabricName}/vpcPairs
+    POST /api/v1/manage/fabrics/{fabricName}/actions/deploy
     """
 
     model_config = COMMON_CONFIG
     api_version: Literal["v1"] = Field(default="v1")
     min_controller_version: str = Field(default="3.0.0")
-    class_name: Literal["EpVpcPairsListGet"] = Field(default="EpVpcPairsListGet")
+    class_name: Literal["EpFabricDeployPost"] = Field(default="EpFabricDeployPost")
 
     @property
     def path(self) -> str:
         if self.fabric_name is None:
             raise ValueError("fabric_name is required")
-        return BasePath.path("fabrics", self.fabric_name, "vpcPairs")
+        return BasePath.path("fabrics", self.fabric_name, "actions", "deploy")
 
     @property
     def verb(self) -> HttpVerbEnum:
-        return HttpVerbEnum.GET
+        return HttpVerbEnum.POST
 
 
-__all__ = ["EpVpcPairsListGet"]
+__all__ = ["EpFabricDeployPost"]

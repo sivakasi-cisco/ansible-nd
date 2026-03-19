@@ -22,7 +22,8 @@ management implementation.
 
 Note:
 - This file does not define API paths.
-- Endpoint path mappings are documented in `vpc_pair_endpoints.py`.
+- Endpoint path mappings are defined by path-based endpoint files under
+  `plugins/module_utils/endpoints/v1/manage/`.
 """
 
 from __future__ import absolute_import, division, print_function

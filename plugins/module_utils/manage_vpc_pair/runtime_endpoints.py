@@ -10,7 +10,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.endpoints.query_params im
     CompositeQueryParams,
     EndpointQueryParams,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.enums import (
     ComponentTypeSupportEnum,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.manage_fabrics_switches_vpc_pair import (

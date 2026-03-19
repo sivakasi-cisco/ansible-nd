@@ -102,6 +102,8 @@ class VpcPairStateMachine(NDStateMachine):
             return
         if self.module.check_mode:
             return
+        if self.module.params.get("suppress_verification", False):
+            return
         if not self.module.params.get("refresh_after_apply", True):
             return
 
@@ -305,9 +307,8 @@ class VpcPairStateMachine(NDStateMachine):
                     sent_payload_data=sent_payload,
                 )
             except VpcPairResourceError as e:
-                # The error details from nd_manage_vpc_pair are dropped by
-                # State machine wrappers in vpc_pair_resources.py
-                # Here is the exception handling to capture those details 
+                # Preserve detailed context from vPC handlers instead of losing
+                # it in generic state-machine wrapping layers.
                 error_msg = f"Failed to process {identifier}: {e.msg}"
                 self.format_log(
                     identifier=identifier,

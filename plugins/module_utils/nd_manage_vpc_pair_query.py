@@ -8,17 +8,17 @@ from __future__ import absolute_import, division, print_function
 from typing import Any, Dict, List, Optional
 
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.enums import (
     VpcFieldNames,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_validation import (
     _is_switch_in_vpc_pair,
     _validate_fabric_switches,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_runtime_endpoints import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.runtime_endpoints import (
     VpcPairEndpoints,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_runtime_payloads import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.runtime_payloads import (
     _get_api_field_value,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.nd_v2 import (
@@ -672,4 +672,3 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
             fabric=fabric_name,
             exception_type=type(e).__name__
         )
-

@@ -7,7 +7,7 @@ from __future__ import absolute_import, division, print_function
 
 from typing import Any, Dict, Optional
 
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_enums import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.enums import (
     VpcActionEnum,
     VpcFieldNames,
 )

@@ -11,7 +11,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
 from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_common import (
     _raise_vpc_error,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.endpoints.v1.manage.vpc_pair_runtime_endpoints import (
+from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.runtime_endpoints import (
     VpcPairEndpoints,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.nd_v2 import (
@@ -221,4 +221,3 @@ def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
     # Build final result
     results.build_final_result()
     return results.final_result
-
