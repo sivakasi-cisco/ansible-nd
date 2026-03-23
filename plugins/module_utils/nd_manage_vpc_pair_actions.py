@@ -198,7 +198,7 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
     - Uses PUT with discriminator (same as create)
     - Validates switches exist in fabric
     - Checks for switch conflicts
-    - Uses DeepDiff to detect if update is actually needed
+    - Uses normalized payload comparison to detect if update is needed
     - Proper error handling
 
     Args:
@@ -244,7 +244,7 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
         if other_vpc_pairs:
             _validate_switch_conflicts([nrm.proposed_config], other_vpc_pairs, nrm.module)
 
-    # Validation Step 3: Check if update is actually needed using DeepDiff
+    # Validation Step 3: Check if update is actually needed
     if nrm.existing_config:
         want_dict = nrm.proposed_config.model_dump(by_alias=True, exclude_none=True) if hasattr(nrm.proposed_config, 'model_dump') else nrm.proposed_config
         have_dict = nrm.existing_config.model_dump(by_alias=True, exclude_none=True) if hasattr(nrm.existing_config, 'model_dump') else nrm.existing_config
@@ -315,7 +315,7 @@ def custom_vpc_update(nrm) -> Optional[Dict[str, Any]]:
         )
 
 
-def custom_vpc_delete(nrm) -> None:
+def custom_vpc_delete(nrm) -> bool:
     """
     Custom delete function for VPC pairs using RestSend with PUT + discriminator.
 
@@ -332,7 +332,7 @@ def custom_vpc_delete(nrm) -> None:
         AnsibleModule.fail_json: If validation fails (networks/VRFs attached)
     """
     if nrm.module.check_mode:
-        return
+        return True
 
     fabric_name = nrm.module.params.get("fabric_name")
     switch_id = nrm.existing_config.get(VpcFieldNames.SWITCH_ID)
@@ -372,7 +372,7 @@ def custom_vpc_delete(nrm) -> None:
         # Sentinel from _validate_vpc_pair_deletion: pair no longer exists.
         # Treat as idempotent success — nothing to delete.
         nrm.module.warn(str(already_unpaired))
-        return
+        return False
 
     except (NDModuleError, Exception) as validation_error:
         # Validation failed - check if force deletion is enabled
@@ -432,11 +432,19 @@ def custom_vpc_delete(nrm) -> None:
         # Idempotent handling: if the API says the switch is not part of any
         # vPC pair, the pair is already gone — treat as a successful no-op.
         if status_code == 400 and "not a part of" in error_msg:
+            # Keep idempotent semantics: this is a no-op delete, so downgrade the
+            # pre-logged operation from "deleted" to "no_change".
+            if getattr(nrm, "logs", None):
+                last_log = nrm.logs[-1]
+                if last_log.get("identifier") == nrm.current_identifier:
+                    last_log["status"] = "no_change"
+                    last_log.pop("sent_payload", None)
+
             nrm.module.warn(
                 f"VPC pair {nrm.current_identifier} is already unpaired on the controller. "
                 f"Treating as idempotent success. API response: {error.msg}"
             )
-            return
+            return False
 
         error_dict = error.to_dict()
         # Preserve original API error message with different key to avoid conflict
@@ -459,3 +467,5 @@ def custom_vpc_delete(nrm) -> None:
             path=path,
             exception_type=type(e).__name__
         )
+
+    return True

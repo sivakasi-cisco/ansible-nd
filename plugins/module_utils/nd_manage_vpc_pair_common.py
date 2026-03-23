@@ -4,21 +4,12 @@
 # GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
 from __future__ import absolute_import, division, print_function
 
-import traceback
+import json
 from typing import Any, Dict, List
 
 from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_exceptions import (
     VpcPairResourceError,
 )
-
-# DeepDiff for intelligent change detection
-try:
-    from deepdiff import DeepDiff
-    HAS_DEEPDIFF = True
-    DEEPDIFF_IMPORT_ERROR = None
-except ImportError:
-    HAS_DEEPDIFF = False
-    DEEPDIFF_IMPORT_ERROR = traceback.format_exc()
 
 def _collection_to_list_flex(collection) -> List[Dict[str, Any]]:
     """
@@ -43,17 +34,38 @@ def _raise_vpc_error(msg: str, **details: Any) -> None:
 # ===== Helper Functions =====
 
 
+def _canonicalize_for_compare(value: Any) -> Any:
+    """
+    Normalize nested payload data for deterministic comparison.
+
+    Lists are sorted by canonical JSON representation so list ordering does
+    not trigger false-positive update detection.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_for_compare(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, list):
+        normalized_items = [_canonicalize_for_compare(item) for item in value]
+        return sorted(
+            normalized_items,
+            key=lambda item: json.dumps(
+                item, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ),
+        )
+    return value
+
+
 def _is_update_needed(want: Dict[str, Any], have: Dict[str, Any]) -> bool:
     """
-    Determine if an update is needed by comparing want and have using DeepDiff.
+    Determine if an update is needed by comparing want and have.
 
-    Uses DeepDiff for intelligent comparison that handles:
+    Uses canonical, order-insensitive comparison that handles:
     - Field additions
     - Value changes
     - Nested structure changes
     - Ignores field order
-
-    Falls back to simple comparison if DeepDiff is unavailable.
 
     Args:
         want: Desired VPC pair configuration (dict)
@@ -68,15 +80,6 @@ def _is_update_needed(want: Dict[str, Any], have: Dict[str, Any]) -> bool:
         >>> _is_update_needed(want, have)
         True
     """
-    if not HAS_DEEPDIFF:
-        # Fallback to simple comparison
-        return want != have
-
-    try:
-        # Use DeepDiff for intelligent comparison
-        diff = DeepDiff(have, want, ignore_order=True)
-        return bool(diff)
-    except Exception:
-        # Fallback to simple comparison if DeepDiff fails
-        return want != have
-
+    normalized_want = _canonicalize_for_compare(want)
+    normalized_have = _canonicalize_for_compare(have)
+    return normalized_want != normalized_have

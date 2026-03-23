@@ -59,6 +59,7 @@
   cisco.nd.tests.integration.nd_vpc_pair_validate:
     gathered_data: "{{ verify_result }}"
     expected_data: "{{ nd_vpc_pair_delete_setup_conf }}"
+    mode: "exists"
   register: validation
   tags: delete
 

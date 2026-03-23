@@ -675,12 +675,22 @@
       }}
   tags: merge
 
-- name: MERGE - TC14 - ASSERT - Ensure support candidates are available
-  ansible.builtin.assert:
-    that:
-      - blocked_switch_id | length > 0
-      - allowed_switch_id | length > 0
-      - blocked_switch_id != allowed_switch_id
+- name: MERGE - TC14 - PREP - Determine if support enforcement scenario is available
+  ansible.builtin.set_fact:
+    tc14_supported_scenario: >-
+      {{
+        (blocked_switch_id | length > 0)
+        and (allowed_switch_id | length > 0)
+        and (blocked_switch_id != allowed_switch_id)
+      }}
+  tags: merge
+
+- name: MERGE - TC14 - INFO - Skip support enforcement validation when no blocked switch exists
+  ansible.builtin.debug:
+    msg: >-
+      Skipping TC14 because no switch reports isPairingAllowed=false in this lab.
+      blocked_switch_id='{{ blocked_switch_id }}', allowed_switch_id='{{ allowed_switch_id }}'
+  when: not tc14_supported_scenario
   tags: merge
 
 - name: MERGE - TC14 - MERGE - Verify unsupported pairing is blocked by module
@@ -693,6 +703,7 @@
         use_virtual_peer_link: true
   register: result
   ignore_errors: true
+  when: tc14_supported_scenario
   tags: merge
 
 - name: MERGE - TC14 - ASSERT - Validate unsupported pairing failure details
@@ -711,6 +722,7 @@
           and (result.conflicts is defined)
           and ((result.conflicts | length) > 0)
         )
+  when: tc14_supported_scenario
   tags: merge
 
 ##############################################

@@ -293,8 +293,8 @@ class VpcPairPlaybookConfigModel(BaseModel):
         default=False,
         description="Skip final after-state refresh query",
     )
-    config: List[VpcPairPlaybookItemModel] = Field(
-        default_factory=list,
+    config: Optional[List[VpcPairPlaybookItemModel]] = Field(
+        default=None,
         description="List of vPC pair configurations",
     )
 

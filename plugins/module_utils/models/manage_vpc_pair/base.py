@@ -15,6 +15,7 @@ from ansible_collections.cisco.nd.plugins.module_utils.common.pydantic_compat im
     BeforeValidator,
     ConfigDict,
 )
+from ansible_collections.cisco.nd.plugins.module_utils.utils import issubset
 from typing_extensions import Self
 
 
@@ -140,3 +141,33 @@ class NDVpcPairBaseModel(BaseModel, ABC):
             exclude_none=True,
             exclude=set(self.exclude_from_diff),
         )
+
+    def get_diff(self, other: "NDVpcPairBaseModel") -> bool:
+        """Return True when ``other`` is a subset of this model for diff checks."""
+        self_data = self.to_diff_dict()
+        other_data = other.to_diff_dict()
+        return issubset(other_data, self_data)
+
+    def merge(self, other: "NDVpcPairBaseModel") -> "NDVpcPairBaseModel":
+        """
+        Merge another model's non-None values into this model instance.
+
+        Nested NDVpcPairBaseModel values are merged recursively.
+        """
+        if not isinstance(other, type(self)):
+            raise TypeError(
+                f"Cannot merge {type(other).__name__} into {type(self).__name__}. "
+                "Both must be the same type."
+            )
+
+        for field_name, value in other:
+            if value is None:
+                continue
+
+            current = getattr(self, field_name, None)
+            if isinstance(current, NDVpcPairBaseModel) and isinstance(value, NDVpcPairBaseModel):
+                current.merge(value)
+            else:
+                setattr(self, field_name, value)
+
+        return self

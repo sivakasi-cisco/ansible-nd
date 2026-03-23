@@ -110,7 +110,7 @@ def custom_vpc_deploy(nrm, fabric_name: str, result: Dict) -> Dict[str, Any]:
         }
     
     if nrm.module.check_mode:
-        # Dry run deployment info (similar to show_dry_run_deployment_info)
+        # check_mode deployment preview
         before = result.get("before", [])
         after = result.get("after", [])
         pending_create = nrm.module.params.get("_pending_create", [])

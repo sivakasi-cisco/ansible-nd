@@ -343,6 +343,33 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         # Keep heavy discovery/enrichment only for write states.
         if state in ("deleted", "gathered"):
             if list_query_succeeded:
+                if state == "deleted" and config and not have:
+                    fallback_have = []
+                    for item in config:
+                        switch_id_val = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
+                        peer_switch_id_val = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
+                        if not switch_id_val or not peer_switch_id_val:
+                            continue
+
+                        use_vpl_val = item.get("use_virtual_peer_link")
+                        if use_vpl_val is None:
+                            use_vpl_val = item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True)
+
+                        fallback_have.append(
+                            {
+                                VpcFieldNames.SWITCH_ID: switch_id_val,
+                                VpcFieldNames.PEER_SWITCH_ID: peer_switch_id_val,
+                                VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl_val,
+                            }
+                        )
+
+                    if fallback_have:
+                        nrm.module.warn(
+                            "vPC list query returned no pairs for delete workflow. "
+                            "Using requested delete config as fallback existing set."
+                        )
+                        return _set_lightweight_context(fallback_have)
+
                 if state == "gathered":
                     have = _filter_vpc_pairs_by_requested_config(have, config)
                     have = _enrich_pairs_from_direct_vpc(
@@ -351,13 +378,20 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                         pairs=have,
                         timeout=5,
                     )
-                have = _filter_stale_vpc_pairs(
-                    nd_v2=nd_v2,
-                    fabric_name=fabric_name,
-                    pairs=have,
-                    module=nrm.module,
-                )
-                return _set_lightweight_context(have)
+                    have = _filter_stale_vpc_pairs(
+                        nd_v2=nd_v2,
+                        fabric_name=fabric_name,
+                        pairs=have,
+                        module=nrm.module,
+                    )
+                    if have:
+                        return _set_lightweight_context(have)
+                    nrm.module.warn(
+                        "vPC list query returned no active pairs for gathered workflow. "
+                        "Falling back to switch-level discovery."
+                    )
+                else:
+                    return _set_lightweight_context(have)
 
             nrm.module.warn(
                 "Skipping switch-level discovery for read-only/delete workflow because "
@@ -365,47 +399,50 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
             )
 
             if state == "gathered":
-                return _set_lightweight_context([])
-
-            # Preserve explicit delete intent without full-fabric discovery.
-            # This keeps delete deterministic and avoids expensive inventory calls.
-            fallback_have = []
-            for item in config:
-                switch_id_val = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
-                peer_switch_id_val = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
-                if not switch_id_val or not peer_switch_id_val:
-                    continue
-
-                use_vpl_val = item.get("use_virtual_peer_link")
-                if use_vpl_val is None:
-                    use_vpl_val = item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True)
-
-                fallback_have.append(
-                    {
-                        VpcFieldNames.SWITCH_ID: switch_id_val,
-                        VpcFieldNames.PEER_SWITCH_ID: peer_switch_id_val,
-                        VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl_val,
-                    }
-                )
-
-            if fallback_have:
                 nrm.module.warn(
-                    "Using requested delete config as fallback existing set because "
-                    "vPC list query failed."
+                    "vPC list endpoint unavailable for gathered workflow. "
+                    "Falling back to switch-level discovery."
                 )
-                return _set_lightweight_context(fallback_have)
+            else:
+                # Preserve explicit delete intent without full-fabric discovery.
+                # This keeps delete deterministic and avoids expensive inventory calls.
+                fallback_have = []
+                for item in config:
+                    switch_id_val = item.get("switch_id") or item.get(VpcFieldNames.SWITCH_ID)
+                    peer_switch_id_val = item.get("peer_switch_id") or item.get(VpcFieldNames.PEER_SWITCH_ID)
+                    if not switch_id_val or not peer_switch_id_val:
+                        continue
 
-            if config:
+                    use_vpl_val = item.get("use_virtual_peer_link")
+                    if use_vpl_val is None:
+                        use_vpl_val = item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK, True)
+
+                    fallback_have.append(
+                        {
+                            VpcFieldNames.SWITCH_ID: switch_id_val,
+                            VpcFieldNames.PEER_SWITCH_ID: peer_switch_id_val,
+                            VpcFieldNames.USE_VIRTUAL_PEER_LINK: use_vpl_val,
+                        }
+                    )
+
+                if fallback_have:
+                    nrm.module.warn(
+                        "Using requested delete config as fallback existing set because "
+                        "vPC list query failed."
+                    )
+                    return _set_lightweight_context(fallback_have)
+
+                if config:
+                    nrm.module.warn(
+                        "Delete config did not contain complete vPC pairs. "
+                        "No delete intents can be built from list-query fallback."
+                    )
+                    return _set_lightweight_context([])
+
                 nrm.module.warn(
-                    "Delete config did not contain complete vPC pairs. "
-                    "No delete intents can be built from list-query fallback."
+                    "Delete-all requested with no explicit pairs and unavailable list endpoint. "
+                    "Falling back to switch-level discovery."
                 )
-                return _set_lightweight_context([])
-
-            nrm.module.warn(
-                "Delete-all requested with no explicit pairs and unavailable list endpoint. "
-                "Falling back to switch-level discovery."
-            )
 
         # Step 2 (write-state enrichment): Query and validate fabric switches.
         fabric_switches = _validate_fabric_switches(nd_v2, fabric_name)
@@ -437,7 +474,6 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         pending_delete = []
         processed_switches = set()
 
-        desired_pairs = {}
         config_switch_ids = set()
         for item in config:
             # Config items are normalized to snake_case in main().
@@ -448,9 +484,6 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 config_switch_ids.add(switch_id_val)
             if peer_switch_id_val:
                 config_switch_ids.add(peer_switch_id_val)
-
-            if switch_id_val and peer_switch_id_val:
-                desired_pairs[tuple(sorted([switch_id_val, peer_switch_id_val]))] = item
 
         for switch_id, switch in fabric_switches.items():
             if switch_id in processed_switches:
@@ -488,26 +521,6 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                     membership = _is_switch_in_vpc_pair(
                         nd_v2, fabric_name, switch_id, timeout=5
                     )
-                    if membership is False:
-                        pair_key = None
-                        if resolved_peer_switch_id:
-                            pair_key = tuple(sorted([switch_id, resolved_peer_switch_id]))
-                        desired_item = desired_pairs.get(pair_key) if pair_key else None
-                        desired_use_vpl = None
-                        if desired_item:
-                            desired_use_vpl = desired_item.get("use_virtual_peer_link")
-                            if desired_use_vpl is None:
-                                desired_use_vpl = desired_item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK)
-
-                        # Narrow override: trust direct payload only for write states
-                        # when it matches desired pair intent.
-                        if state in ("merged", "replaced", "overridden") and desired_item is not None:
-                            if desired_use_vpl is None or bool(desired_use_vpl) == bool(use_vpl):
-                                nrm.module.warn(
-                                    f"Overview membership check returned 'not paired' for switch {switch_id}, "
-                                    "but direct /vpcPair matched requested config. Treating pair as active."
-                                )
-                                membership = True
                     if membership is False:
                         pending_delete.append({
                             VpcFieldNames.SWITCH_ID: switch_id,
@@ -574,22 +587,6 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                             nd_v2, fabric_name, switch_id, timeout=5
                         )
                         if membership is False:
-                            pair_key = tuple(sorted([switch_id, peer_switch_id]))
-                            desired_item = desired_pairs.get(pair_key)
-                            desired_use_vpl = None
-                            if desired_item:
-                                desired_use_vpl = desired_item.get("use_virtual_peer_link")
-                                if desired_use_vpl is None:
-                                    desired_use_vpl = desired_item.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK)
-
-                            if state in ("merged", "replaced", "overridden") and desired_item is not None:
-                                if desired_use_vpl is None or bool(desired_use_vpl) == bool(use_vpl):
-                                    nrm.module.warn(
-                                        f"Overview membership check returned 'not paired' for switch {switch_id}, "
-                                        "but direct /vpcPair matched requested config. Treating pair as active."
-                                    )
-                                    membership = True
-                        if membership is False:
                             pending_delete.append({
                                 VpcFieldNames.SWITCH_ID: switch_id,
                                 VpcFieldNames.PEER_SWITCH_ID: peer_switch_id,
@@ -632,11 +629,14 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         nrm.module.params["_pending_delete"] = pending_delete
 
         # Build effective existing set for state reconciliation:
-        # - Include active pairs (have) and pending-create pairs.
+        # - Include only active pairs (have).
         # - Exclude pending-delete pairs from active set to avoid stale
         #   idempotence false-negatives right after unpair operations.
+        #
+        # Pending-create candidates are recommendations, not configured pairs.
+        # Treating them as existing causes false no-change outcomes for create.
         pair_by_key = {}
-        for pair in pending_create + have:
+        for pair in have:
             switch_id = pair.get(VpcFieldNames.SWITCH_ID)
             peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID)
             if not switch_id or not peer_switch_id:
