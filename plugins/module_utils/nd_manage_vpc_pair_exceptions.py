@@ -11,6 +11,14 @@ class VpcPairResourceError(Exception):
     """Structured error raised by vpc_pair runtime layers."""
 
     def __init__(self, msg: str, **details: Any):
+        """
+        Initialize VpcPairResourceError.
+
+        Args:
+            msg: Human-readable error message
+            **details: Arbitrary keyword args for structured error context
+                (e.g. fabric, vpc_pair_key, missing_switches)
+        """
         super().__init__(msg)
         self.msg = msg
         self.details = details

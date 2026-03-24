@@ -18,7 +18,16 @@ def run_vpc_module(nrm) -> Dict[str, Any]:
     """
     Run VPC module state machine with VPC-specific gathered output.
 
-    gathered is the query/read-only mode for VPC pairs.
+    Top-level state router. For gathered: builds read-only output filtering out
+    pending-delete pairs. For deleted/overridden with empty config: synthesizes
+    explicit delete intents. Otherwise delegates to nrm.manage_state().
+
+    Args:
+        nrm: VpcPairStateMachine instance
+
+    Returns:
+        Dict with module result including current, gathered, before, after,
+        changed, created, deleted, updated keys.
     """
     state = nrm.module.params.get("state", "merged")
     config = nrm.module.params.get("config", [])

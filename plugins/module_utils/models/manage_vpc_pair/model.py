@@ -57,13 +57,13 @@ class VpcPairModel(_VpcPairBaseModel):
 
     switch_id: str = Field(
         alias=VpcFieldNames.SWITCH_ID,
-        description="Peer-1 switch serial number",
+        description="Peer-1 switch serial number or management IP address",
         min_length=3,
         max_length=64,
     )
     peer_switch_id: str = Field(
         alias=VpcFieldNames.PEER_SWITCH_ID,
-        description="Peer-2 switch serial number",
+        description="Peer-2 switch serial number or management IP address",
         min_length=3,
         max_length=64,
     )
@@ -82,12 +82,33 @@ class VpcPairModel(_VpcPairBaseModel):
     @field_validator("switch_id", "peer_switch_id")
     @classmethod
     def validate_switch_id_format(cls, v: str) -> str:
+        """
+        Validate switch ID is not empty or whitespace.
+
+        Args:
+            v: Raw switch ID string
+
+        Returns:
+            Stripped switch ID string.
+
+        Raises:
+            ValueError: If switch ID is empty or whitespace-only
+        """
         if not v or not v.strip():
             raise ValueError("Switch ID cannot be empty or whitespace")
         return v.strip()
 
     @model_validator(mode="after")
     def validate_different_switches(self) -> "VpcPairModel":
+        """
+        Validate that switch_id and peer_switch_id are not the same.
+
+        Returns:
+            Self if validation passes.
+
+        Raises:
+            ValueError: If both switch IDs are identical
+        """
         if self.switch_id == self.peer_switch_id:
             raise ValueError(
                 f"switch_id and peer_switch_id must be different: {self.switch_id}"
@@ -95,9 +116,21 @@ class VpcPairModel(_VpcPairBaseModel):
         return self
 
     def to_payload(self) -> Dict[str, Any]:
+        """
+        Serialize model to camelCase API payload dict.
+
+        Returns:
+            Dict with alias (camelCase) keys, excluding None values.
+        """
         return self.model_dump(by_alias=True, exclude_none=True)
 
     def to_diff_dict(self) -> Dict[str, Any]:
+        """
+        Serialize model for diff comparison, excluding configured fields.
+
+        Returns:
+            Dict with alias keys, excluding None and exclude_from_diff fields.
+        """
         return self.model_dump(
             by_alias=True,
             exclude_none=True,
@@ -105,13 +138,39 @@ class VpcPairModel(_VpcPairBaseModel):
         )
 
     def get_identifier_value(self):
+        """
+        Return the unique identifier for this vPC pair.
+
+        Returns:
+            Tuple of sorted (switch_id, peer_switch_id) for order-independent matching.
+        """
         return tuple(sorted([self.switch_id, self.peer_switch_id]))
 
     def to_config(self, **kwargs) -> Dict[str, Any]:
+        """
+        Serialize model to snake_case Ansible config dict.
+
+        Args:
+            **kwargs: Additional kwargs passed to model_dump
+
+        Returns:
+            Dict with Python-name keys, excluding None values.
+        """
         return self.model_dump(by_alias=False, exclude_none=True, **kwargs)
 
     @classmethod
     def from_config(cls, ansible_config: Dict[str, Any]) -> "VpcPairModel":
+        """
+        Construct VpcPairModel from playbook config dict.
+
+        Accepts both snake_case module input and API camelCase aliases.
+
+        Args:
+            ansible_config: Dict from playbook config item
+
+        Returns:
+            Validated VpcPairModel instance.
+        """
         data = dict(ansible_config or {})
 
         # Accept both snake_case module input and API camelCase aliases.
@@ -130,6 +189,18 @@ class VpcPairModel(_VpcPairBaseModel):
         return cls.model_validate(data, by_alias=True, by_name=True)
 
     def merge(self, other_model: "VpcPairModel") -> "VpcPairModel":
+        """
+        Merge non-None values from another model into this instance.
+
+        Args:
+            other_model: VpcPairModel whose non-None fields overwrite this model
+
+        Returns:
+            Self with merged values.
+
+        Raises:
+            TypeError: If other_model is not the same type
+        """
         if not isinstance(other_model, type(self)):
             raise TypeError(
                 "VpcPairModel.merge requires both models to be the same type"
@@ -143,6 +214,15 @@ class VpcPairModel(_VpcPairBaseModel):
 
     @classmethod
     def from_response(cls, response: Dict[str, Any]) -> "VpcPairModel":
+        """
+        Construct VpcPairModel from an API response dict.
+
+        Args:
+            response: Dict from ND API response
+
+        Returns:
+            Validated VpcPairModel instance.
+        """
         data = {
             VpcFieldNames.SWITCH_ID: response.get(VpcFieldNames.SWITCH_ID),
             VpcFieldNames.PEER_SWITCH_ID: response.get(VpcFieldNames.PEER_SWITCH_ID),
@@ -179,13 +259,13 @@ class VpcPairPlaybookItemModel(BaseModel):
 
     peer1_switch_id: str = Field(
         alias="switch_id",
-        description="Peer-1 switch serial number",
+        description="Peer-1 switch serial number or management IP address",
         min_length=3,
         max_length=64,
     )
     peer2_switch_id: str = Field(
         alias="peer_switch_id",
-        description="Peer-2 switch serial number",
+        description="Peer-2 switch serial number or management IP address",
         min_length=3,
         max_length=64,
     )
@@ -203,12 +283,33 @@ class VpcPairPlaybookItemModel(BaseModel):
     @field_validator("peer1_switch_id", "peer2_switch_id")
     @classmethod
     def validate_switch_id_format(cls, v: str) -> str:
+        """
+        Validate switch ID is not empty or whitespace.
+
+        Args:
+            v: Raw switch ID string
+
+        Returns:
+            Stripped switch ID string.
+
+        Raises:
+            ValueError: If switch ID is empty or whitespace-only
+        """
         if not v or not v.strip():
             raise ValueError("Switch ID cannot be empty or whitespace")
         return v.strip()
 
     @model_validator(mode="after")
     def validate_different_switches(self) -> "VpcPairPlaybookItemModel":
+        """
+        Validate that peer1_switch_id and peer2_switch_id are not the same.
+
+        Returns:
+            Self if validation passes.
+
+        Raises:
+            ValueError: If both switch IDs are identical
+        """
         if self.peer1_switch_id == self.peer2_switch_id:
             raise ValueError(
                 "peer1_switch_id and peer2_switch_id must be different: "
@@ -219,6 +320,10 @@ class VpcPairPlaybookItemModel(BaseModel):
     def to_runtime_config(self) -> Dict[str, Any]:
         """
         Normalize playbook keys into runtime keys consumed by state machine code.
+
+        Returns:
+            Dict with both snake_case and camelCase keys for switch IDs,
+            use_virtual_peer_link, and vpc_pair_details.
         """
         switch_id = self.peer1_switch_id
         peer_switch_id = self.peer2_switch_id

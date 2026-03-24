@@ -5,6 +5,7 @@
 
 from __future__ import absolute_import, division, print_function
 
+import ipaddress
 from typing import Any, Dict, List, Optional
 
 from ansible_collections.cisco.nd.plugins.module_utils.enums import HttpVerbEnum
@@ -14,6 +15,12 @@ from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.enums imp
 from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_validation import (
     _is_switch_in_vpc_pair,
     _validate_fabric_switches,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_common import (
+    _raise_vpc_error,
+)
+from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_exceptions import (
+    VpcPairResourceError,
 )
 from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.runtime_endpoints import (
     VpcPairEndpoints,
@@ -118,6 +125,13 @@ def _extract_vpc_pairs_from_list_response(vpc_pairs_response: Any) -> List[Dict[
     Extract VPC pair list entries from /vpcPairs response payload.
 
     Supports common response wrappers used by ND API.
+
+    Args:
+        vpc_pairs_response: Raw API response dict from /vpcPairs list endpoint
+
+    Returns:
+        List of dicts with switchId, peerSwitchId, useVirtualPeerLink keys.
+        Empty list if response is invalid or contains no pairs.
     """
     if not isinstance(vpc_pairs_response, dict):
         return []
@@ -173,6 +187,16 @@ def _enrich_pairs_from_direct_vpc(
     The /vpcPairs list response may omit fields like useVirtualPeerLink.
     This helper preserves lightweight list discovery while improving field
     accuracy for gathered output.
+
+    Args:
+        nd_v2: NDModuleV2 instance for RestSend
+        fabric_name: Fabric name
+        pairs: List of pair dicts from list endpoint
+        timeout: Per-switch query timeout in seconds
+
+    Returns:
+        List of enriched pair dicts with updated field values from direct queries.
+        Original values preserved when direct query fails.
     """
     if not pairs:
         return []
@@ -227,6 +251,15 @@ def _filter_stale_vpc_pairs(
     `/vpcPairs` can briefly lag after unpair operations. We perform a lightweight
     best-effort membership check and drop entries that are explicitly reported as
     not part of a vPC pair.
+
+    Args:
+        nd_v2: NDModuleV2 instance for RestSend
+        fabric_name: Fabric name
+        pairs: List of pair dicts to validate
+        module: AnsibleModule instance for warnings
+
+    Returns:
+        Filtered list of pair dicts with stale entries removed.
     """
     if not pairs:
         return []
@@ -259,6 +292,14 @@ def _filter_vpc_pairs_by_requested_config(
 
     If gathered config is empty or does not contain complete switch pairs, return
     the unfiltered pair list.
+
+    Args:
+        pairs: List of discovered pair dicts from API
+        config: List of user-requested pair dicts from playbook
+
+    Returns:
+        Filtered list of pair dicts matching requested config keys.
+        Returns full pair list when config is empty or has no complete pairs.
     """
     if not pairs or not config:
         return list(pairs or [])
@@ -285,6 +326,189 @@ def _filter_vpc_pairs_by_requested_config(
     return filtered_pairs
 
 
+def _is_ip_literal(value: Any) -> bool:
+    """
+    Return True when value is a valid IPv4/IPv6 literal string.
+
+    Args:
+        value: Any value to check
+
+    Returns:
+        True if value is a valid IP address string, False otherwise.
+    """
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    if not candidate:
+        return False
+    try:
+        ipaddress.ip_address(candidate)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_config_switch_ips(
+    nd_v2,
+    module,
+    fabric_name: str,
+    config: List[Dict[str, Any]],
+):
+    """
+    Resolve switch identifiers from management IPs to serial numbers.
+
+    If config contains IP literals in switch fields, query fabric switch inventory
+    and replace those IPs with serial numbers in both snake_case and API keys.
+
+    Args:
+        nd_v2: NDModuleV2 instance for RestSend
+        module: AnsibleModule instance for warnings
+        fabric_name: Fabric name for inventory lookup
+        config: List of config item dicts (may contain IP-based switch IDs)
+
+    Returns:
+        Tuple of (normalized_config, ip_to_sn_mapping, fabric_switches_dict).
+        Returns (original_config, {}, None) when no IPs are found.
+    """
+    if not config:
+        return list(config or []), {}, None
+
+    has_ip_inputs = False
+    for item in config:
+        if not isinstance(item, dict):
+            continue
+        for key in ("switch_id", VpcFieldNames.SWITCH_ID, "peer_switch_id", VpcFieldNames.PEER_SWITCH_ID):
+            if _is_ip_literal(item.get(key)):
+                has_ip_inputs = True
+                break
+        if has_ip_inputs:
+            break
+
+    if not has_ip_inputs:
+        return list(config), {}, None
+
+    fabric_switches = _validate_fabric_switches(nd_v2, fabric_name)
+    ip_to_sn = {
+        str(sw.get(VpcFieldNames.FABRIC_MGMT_IP)).strip(): sw.get(VpcFieldNames.SERIAL_NUMBER)
+        for sw in fabric_switches.values()
+        if sw.get(VpcFieldNames.FABRIC_MGMT_IP) and sw.get(VpcFieldNames.SERIAL_NUMBER)
+    }
+
+    if not ip_to_sn:
+        module.warn(
+            "Switch IP identifiers were provided in config, but no "
+            "fabricManagementIp to serialNumber mapping was discovered. "
+            "Continuing with identifiers as provided."
+        )
+        return list(config), {}, fabric_switches
+
+    normalized_config: List[Dict[str, Any]] = []
+    resolved_inputs: Dict[str, str] = {}
+    unresolved_inputs = set()
+
+    for item in config:
+        if not isinstance(item, dict):
+            normalized_config.append(item)
+            continue
+
+        normalized_item = dict(item)
+        for snake_key, api_key in (
+            ("switch_id", VpcFieldNames.SWITCH_ID),
+            ("peer_switch_id", VpcFieldNames.PEER_SWITCH_ID),
+        ):
+            raw_identifier = normalized_item.get(snake_key)
+            if raw_identifier is None:
+                raw_identifier = normalized_item.get(api_key)
+            if raw_identifier is None:
+                continue
+
+            resolved_identifier = raw_identifier
+            if _is_ip_literal(raw_identifier):
+                ip_value = str(raw_identifier).strip()
+                mapped_serial = ip_to_sn.get(ip_value)
+                if mapped_serial:
+                    resolved_identifier = mapped_serial
+                    resolved_inputs[ip_value] = mapped_serial
+                else:
+                    unresolved_inputs.add(ip_value)
+
+            normalized_item[snake_key] = resolved_identifier
+            normalized_item[api_key] = resolved_identifier
+
+        normalized_config.append(normalized_item)
+
+    for ip_value, serial in sorted(resolved_inputs.items()):
+        module.warn(
+            f"Resolved playbook switch IP {ip_value} to switch serial {serial} "
+            f"for fabric {fabric_name}."
+        )
+
+    if unresolved_inputs:
+        module.warn(
+            "Could not resolve playbook switch IP(s) to serial numbers for "
+            f"fabric {fabric_name}: {', '.join(sorted(unresolved_inputs))}. "
+            "Those values will be processed as provided."
+        )
+
+    return normalized_config, ip_to_sn, fabric_switches
+
+
+def normalize_vpc_playbook_switch_identifiers(
+    module,
+    nd_v2=None,
+    fabric_name: Optional[str] = None,
+    state: Optional[str] = None,
+):
+    """
+    Normalize playbook switch identifiers from management IPs to serial numbers.
+
+    Updates module params in-place:
+    - merged/replaced/overridden/deleted: module.params["config"]
+    - gathered: module.params["_gather_filter_config"]
+
+    Also merges resolved IP->serial mappings into module.params["_ip_to_sn_mapping"].
+
+    Args:
+        module: AnsibleModule instance
+        nd_v2: Optional NDModuleV2 instance (created internally if None)
+        fabric_name: Optional fabric name override (defaults to module param)
+        state: Optional state override (defaults to module param)
+
+    Returns:
+        Optional[Dict[str, Dict]]: Preloaded fabric switches map when queried, else None.
+    """
+    effective_state = state or module.params.get("state", "merged")
+    effective_fabric = fabric_name if fabric_name is not None else module.params.get("fabric_name")
+
+    if effective_state == "gathered":
+        config = module.params.get("_gather_filter_config") or []
+    else:
+        config = module.params.get("config") or []
+
+    if nd_v2 is None:
+        nd_v2 = NDModuleV2(module)
+
+    config, resolved_ip_to_sn, preloaded_fabric_switches = _resolve_config_switch_ips(
+        nd_v2=nd_v2,
+        module=module,
+        fabric_name=effective_fabric,
+        config=config,
+    )
+
+    if effective_state == "gathered":
+        module.params["_gather_filter_config"] = list(config)
+    else:
+        module.params["config"] = list(config)
+
+    if resolved_ip_to_sn:
+        existing_map = module.params.get("_ip_to_sn_mapping") or {}
+        merged_map = dict(existing_map) if isinstance(existing_map, dict) else {}
+        merged_map.update(resolved_ip_to_sn)
+        module.params["_ip_to_sn_mapping"] = merged_map
+
+    return preloaded_fabric_switches
+
+
 def custom_vpc_query_all(nrm) -> List[Dict]:
     """
     Query existing VPC pairs with state-aware enrichment.
@@ -294,6 +518,17 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
     - gathered/deleted: use lightweight list-only data when available
     - merged/replaced/overridden: enrich with switch inventory and recommendation
       APIs to build have/pending_create/pending_delete sets
+
+    Args:
+        nrm: VpcPairStateMachine or query context with .module attribute
+
+    Returns:
+        List of existing pair dicts for NDConfigCollection initialization.
+        Also populates module params: _have, _pending_create, _pending_delete,
+        _fabric_switches, _fabric_switches_count, _ip_to_sn_mapping.
+
+    Raises:
+        VpcPairResourceError: On unrecoverable query failures
     """
     fabric_name = nrm.module.params.get("fabric_name")
 
@@ -301,18 +536,27 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         raise ValueError(f"fabric_name must be a non-empty string. Got: {fabric_name!r}")
 
     state = nrm.module.params.get("state", "merged")
+    # Initialize RestSend via NDModuleV2
+    nd_v2 = NDModuleV2(nrm.module)
+    preloaded_fabric_switches = normalize_vpc_playbook_switch_identifiers(
+        module=nrm.module,
+        nd_v2=nd_v2,
+        fabric_name=fabric_name,
+        state=state,
+    )
+
     if state == "gathered":
         config = nrm.module.params.get("_gather_filter_config") or []
     else:
         config = nrm.module.params.get("config") or []
 
-    # Initialize RestSend via NDModuleV2
-    nd_v2 = NDModuleV2(nrm.module)
-
     def _set_lightweight_context(lightweight_have: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         nrm.module.params["_fabric_switches"] = []
         nrm.module.params["_fabric_switches_count"] = 0
-        nrm.module.params["_ip_to_sn_mapping"] = {}
+        existing_map = nrm.module.params.get("_ip_to_sn_mapping")
+        nrm.module.params["_ip_to_sn_mapping"] = (
+            dict(existing_map) if isinstance(existing_map, dict) else {}
+        )
         nrm.module.params["_have"] = lightweight_have
         nrm.module.params["_pending_create"] = []
         nrm.module.params["_pending_delete"] = []
@@ -445,7 +689,9 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 )
 
         # Step 2 (write-state enrichment): Query and validate fabric switches.
-        fabric_switches = _validate_fabric_switches(nd_v2, fabric_name)
+        fabric_switches = preloaded_fabric_switches
+        if fabric_switches is None:
+            fabric_switches = _validate_fabric_switches(nd_v2, fabric_name)
 
         if not fabric_switches:
             nrm.module.warn(f"No switches found in fabric {fabric_name}")
@@ -467,7 +713,10 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
             for sw in fabric_switches.values()
             if VpcFieldNames.FABRIC_MGMT_IP in sw
         }
-        nrm.module.params["_ip_to_sn_mapping"] = ip_to_sn
+        existing_map = nrm.module.params.get("_ip_to_sn_mapping") or {}
+        merged_map = dict(existing_map) if isinstance(existing_map, dict) else {}
+        merged_map.update(ip_to_sn)
+        nrm.module.params["_ip_to_sn_mapping"] = merged_map
 
         # Step 3: Track 3-state VPC pairs (have/pending_create/pending_delete).
         pending_create = []

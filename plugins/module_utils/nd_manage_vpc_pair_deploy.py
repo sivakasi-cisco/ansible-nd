@@ -61,6 +61,13 @@ def _needs_deployment(result: Dict, nrm) -> bool:
 def _is_non_fatal_config_save_error(error: NDModuleError) -> bool:
     """
     Return True only for known non-fatal configSave platform limitations.
+
+    Args:
+        error: NDModuleError from config-save API call
+
+    Returns:
+        True if the error matches a known non-fatal 500 signature
+        (e.g. fabric peering not supported). False otherwise.
     """
     if not isinstance(error, NDModuleError):
         return False

@@ -20,7 +20,18 @@ from typing_extensions import Self
 
 
 def coerce_str_to_int(data):
-    """Convert string to int, handle None."""
+    """
+    Convert string to int, handle None.
+
+    Args:
+        data: Value to coerce (str, int, or None)
+
+    Returns:
+        Integer value, or None if input is None.
+
+    Raises:
+        ValueError: If string cannot be converted to int
+    """
     if data is None:
         return None
     if isinstance(data, str):
@@ -31,7 +42,16 @@ def coerce_str_to_int(data):
 
 
 def coerce_to_bool(data):
-    """Convert various formats to bool."""
+    """
+    Convert various formats to bool.
+
+    Args:
+        data: Value to coerce (str, bool, int, or None)
+
+    Returns:
+        Boolean value, or None if input is None.
+        Strings 'true', '1', 'yes', 'on' map to True.
+    """
     if data is None:
         return None
     if isinstance(data, str):
@@ -40,7 +60,16 @@ def coerce_to_bool(data):
 
 
 def coerce_list_of_str(data):
-    """Ensure data is a list of strings."""
+    """
+    Ensure data is a list of strings.
+
+    Args:
+        data: Value to coerce (str, list, or None)
+
+    Returns:
+        List of strings, or None if input is None.
+        Comma-separated strings are split into list items.
+    """
     if data is None:
         return None
     if isinstance(data, str):
@@ -76,17 +105,43 @@ class NDVpcPairBaseModel(BaseModel, ABC):
 
     @abstractmethod
     def to_payload(self) -> Dict[str, Any]:
-        """Convert model to API payload format."""
+        """
+        Convert model to API payload format.
+
+        Returns:
+            Dict with camelCase API field names.
+        """
         pass
 
     @classmethod
     @abstractmethod
     def from_response(cls, response: Dict[str, Any]) -> Self:
-        """Create model instance from API response."""
+        """
+        Create model instance from API response.
+
+        Args:
+            response: Dict from ND API response
+
+        Returns:
+            Validated model instance.
+        """
         pass
 
     def get_identifier_value(self) -> Union[str, int, Tuple[Any, ...]]:
-        """Extract identifier value(s) from this instance."""
+        """
+        Extract identifier value(s) from this instance.
+
+        Uses the configured identifier_strategy (single, composite, or hierarchical)
+        to determine how to extract and return the identifier.
+
+        Returns:
+            Single value for 'single' strategy, tuple for 'composite',
+            or (field_name, value) tuple for 'hierarchical'.
+
+        Raises:
+            ValueError: If identifiers are not defined, required fields are None,
+                or strategy is unknown.
+        """
         if not self.identifiers:
             raise ValueError(f"{self.__class__.__name__} has no identifiers defined")
 
@@ -124,7 +179,15 @@ class NDVpcPairBaseModel(BaseModel, ABC):
         raise ValueError(f"Unknown identifier strategy: {self.identifier_strategy}")
 
     def get_switch_pair_key(self) -> str:
-        """Generate a unique key for VPC pair (sorted switch IDs)."""
+        """
+        Generate a unique key for VPC pair (sorted switch IDs).
+
+        Returns:
+            Deterministic "ID1-ID2" string with sorted switch serial numbers.
+
+        Raises:
+            ValueError: If identifier_strategy is not composite with 2 identifiers
+        """
         if self.identifier_strategy != "composite" or len(self.identifiers) != 2:
             raise ValueError(
                 "get_switch_pair_key only works with composite strategy and 2 identifiers"
@@ -135,7 +198,12 @@ class NDVpcPairBaseModel(BaseModel, ABC):
         return f"{sorted_ids[0]}-{sorted_ids[1]}"
 
     def to_diff_dict(self) -> Dict[str, Any]:
-        """Export for diff comparison (excludes sensitive fields)."""
+        """
+        Export for diff comparison (excludes sensitive fields).
+
+        Returns:
+            Dict with alias keys, excluding None and exclude_from_diff fields.
+        """
         return self.model_dump(
             by_alias=True,
             exclude_none=True,
@@ -143,7 +211,15 @@ class NDVpcPairBaseModel(BaseModel, ABC):
         )
 
     def get_diff(self, other: "NDVpcPairBaseModel") -> bool:
-        """Return True when ``other`` is a subset of this model for diff checks."""
+        """
+        Return True when ``other`` is a subset of this model for diff checks.
+
+        Args:
+            other: Model instance to compare against
+
+        Returns:
+            True if other's diff dict is a subset of self's diff dict.
+        """
         self_data = self.to_diff_dict()
         other_data = other.to_diff_dict()
         return issubset(other_data, self_data)
@@ -153,6 +229,15 @@ class NDVpcPairBaseModel(BaseModel, ABC):
         Merge another model's non-None values into this model instance.
 
         Nested NDVpcPairBaseModel values are merged recursively.
+
+        Args:
+            other: Model instance whose non-None fields overwrite this model
+
+        Returns:
+            Self with merged values.
+
+        Raises:
+            TypeError: If other is not the same type as self
         """
         if not isinstance(other, type(self)):
             raise TypeError(

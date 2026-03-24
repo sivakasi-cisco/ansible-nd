@@ -34,6 +34,20 @@ def _get_pairing_support_details(
 ) -> Optional[Dict[str, Any]]:
     """
     Query /vpcPairSupport endpoint to validate pairing support.
+
+    Args:
+        nd_v2: NDModuleV2 instance for RestSend
+        fabric_name: Fabric name
+        switch_id: Switch serial number
+        component_type: Support check type (default: checkPairing)
+        timeout: Optional timeout override (uses module query_timeout if not specified)
+
+    Returns:
+        Dict with support details, or None if response is not a dict.
+
+    Raises:
+        ValueError: If fabric_name or switch_id are invalid
+        NDModuleError: On API errors
     """
     if not fabric_name or not isinstance(fabric_name, str):
         raise ValueError(f"Invalid fabric_name: {fabric_name}")
@@ -75,6 +89,14 @@ def _validate_fabric_peering_support(
 
     If API explicitly reports unsupported fabric peering, logs warning and
     continues. If support API is unavailable, logs warning and continues.
+
+    Args:
+        nrm: VpcPairStateMachine instance for logging warnings
+        nd_v2: NDModuleV2 instance for RestSend
+        fabric_name: Fabric name
+        switch_id: Primary switch serial number
+        peer_switch_id: Peer switch serial number
+        use_virtual_peer_link: Whether virtual peer link is requested
     """
     if not use_virtual_peer_link:
         return
@@ -121,6 +143,19 @@ def _get_consistency_details(
 ) -> Optional[Dict[str, Any]]:
     """
     Query /vpcPairConsistency endpoint for consistency diagnostics.
+
+    Args:
+        nd_v2: NDModuleV2 instance for RestSend
+        fabric_name: Fabric name
+        switch_id: Switch serial number
+        timeout: Optional timeout override (uses module query_timeout if not specified)
+
+    Returns:
+        Dict with consistency details, or None if response is not a dict.
+
+    Raises:
+        ValueError: If fabric_name or switch_id are invalid
+        NDModuleError: On API errors
     """
     if not fabric_name or not isinstance(fabric_name, str):
         raise ValueError(f"Invalid fabric_name: {fabric_name}")
@@ -154,10 +189,16 @@ def _is_switch_in_vpc_pair(
     """
     Best-effort active-membership check via vPC overview endpoint.
 
+    Args:
+        nd_v2: NDModuleV2 instance for RestSend
+        fabric_name: Fabric name
+        switch_id: Switch serial number
+        timeout: Optional timeout override (uses module query_timeout if not specified)
+
     Returns:
-      - True: overview query succeeded (switch is part of a vPC pair)
-      - False: API explicitly reports switch is not in a vPC pair
-      - None: unknown/error (do not block caller logic)
+        True: overview query succeeded (switch is part of a vPC pair)
+        False: API explicitly reports switch is not in a vPC pair
+        None: unknown/error (do not block caller logic)
     """
     if not fabric_name or not switch_id:
         return None
@@ -347,6 +388,15 @@ def _validate_switches_exist_in_fabric(
     This check is mandatory for create/update. Empty inventory is treated as
     a validation error to avoid bypassing guardrails and failing later with a
     less actionable API error.
+
+    Args:
+        nrm: VpcPairStateMachine instance with module params containing _fabric_switches
+        fabric_name: Fabric name for error messages
+        switch_id: Primary switch serial number
+        peer_switch_id: Peer switch serial number
+
+    Raises:
+        VpcPairResourceError: If switches are missing from fabric inventory
     """
     fabric_switches = nrm.module.params.get("_fabric_switches")
 

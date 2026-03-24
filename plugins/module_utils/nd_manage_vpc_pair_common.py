@@ -14,6 +14,16 @@ from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_except
 def _collection_to_list_flex(collection) -> List[Dict[str, Any]]:
     """
     Serialize NDConfigCollection across old/new framework variants.
+
+    Tries multiple serialization methods in order to support different
+    NDConfigCollection implementations.
+
+    Args:
+        collection: NDConfigCollection instance or None
+
+    Returns:
+        List of dicts from the collection. Empty list if collection is None
+        or has no recognized serialization method.
     """
     if collection is None:
         return []
@@ -27,7 +37,16 @@ def _collection_to_list_flex(collection) -> List[Dict[str, Any]]:
 
 
 def _raise_vpc_error(msg: str, **details: Any) -> None:
-    """Raise a structured vpc_pair error for main() to format via fail_json."""
+    """
+    Raise a structured vpc_pair error for main() to format via fail_json.
+
+    Args:
+        msg: Human-readable error message
+        **details: Arbitrary keyword args passed to VpcPairResourceError
+
+    Raises:
+        VpcPairResourceError: Always raised with msg and details
+    """
     raise VpcPairResourceError(msg=msg, **details)
 
 
@@ -40,6 +59,12 @@ def _canonicalize_for_compare(value: Any) -> Any:
 
     Lists are sorted by canonical JSON representation so list ordering does
     not trigger false-positive update detection.
+
+    Args:
+        value: Any nested data structure (dict, list, or primitive)
+
+    Returns:
+        Canonicalized copy with sorted dicts and sorted lists.
     """
     if isinstance(value, dict):
         return {
