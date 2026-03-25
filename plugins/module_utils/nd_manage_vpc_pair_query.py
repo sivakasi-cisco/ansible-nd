@@ -536,6 +536,7 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         raise ValueError(f"fabric_name must be a non-empty string. Got: {fabric_name!r}")
 
     state = nrm.module.params.get("state", "merged")
+    nrm.module.params["_pending_state_known"] = True
     # Initialize RestSend via NDModuleV2
     nd_v2 = NDModuleV2(nrm.module)
     preloaded_fabric_switches = normalize_vpc_playbook_switch_identifiers(
@@ -550,7 +551,10 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
     else:
         config = nrm.module.params.get("config") or []
 
-    def _set_lightweight_context(lightweight_have: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _set_lightweight_context(
+        lightweight_have: List[Dict[str, Any]],
+        pending_state_known: bool = True,
+    ) -> List[Dict[str, Any]]:
         nrm.module.params["_fabric_switches"] = []
         nrm.module.params["_fabric_switches_count"] = 0
         existing_map = nrm.module.params.get("_ip_to_sn_mapping")
@@ -560,6 +564,7 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
         nrm.module.params["_have"] = lightweight_have
         nrm.module.params["_pending_create"] = []
         nrm.module.params["_pending_delete"] = []
+        nrm.module.params["_pending_state_known"] = pending_state_known
         return lightweight_have
 
     try:
@@ -629,7 +634,10 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                         module=nrm.module,
                     )
                     if have:
-                        return _set_lightweight_context(have)
+                        return _set_lightweight_context(
+                            lightweight_have=have,
+                            pending_state_known=False,
+                        )
                     nrm.module.warn(
                         "vPC list query returned no active pairs for gathered workflow. "
                         "Falling back to switch-level discovery."

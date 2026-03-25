@@ -390,10 +390,6 @@ class VpcPairPlaybookConfigModel(BaseModel):
         default=None,
         description="Optional timeout for post-apply refresh query",
     )
-    suppress_previous: bool = Field(
-        default=False,
-        description="Skip initial before-state query (merged state only)",
-    )
     suppress_verification: bool = Field(
         default=False,
         description="Skip final after-state refresh query",
@@ -453,14 +449,6 @@ class VpcPairPlaybookConfigModel(BaseModel):
                 description=(
                     "Optional timeout in seconds for post-apply after-state "
                     "refresh query"
-                ),
-            ),
-            suppress_previous=dict(
-                type="bool",
-                default=False,
-                description=(
-                    "Skip initial controller query for before/diff baseline. "
-                    "Supported only with state=merged."
                 ),
             ),
             suppress_verification=dict(
