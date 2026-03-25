@@ -206,11 +206,16 @@ class VpcPairModel(_VpcPairBaseModel):
                 "VpcPairModel.merge requires both models to be the same type"
             )
 
-        for field, value in other_model:
+        merged_data = self.model_dump(by_alias=False, exclude_none=False)
+        incoming_data = other_model.model_dump(by_alias=False, exclude_none=False)
+        for field, value in incoming_data.items():
             if value is None:
                 continue
-            setattr(self, field, value)
-        return self
+            merged_data[field] = value
+
+        # Validate once after the full merge so reversed pair updates do not
+        # fail on transient assignment states with validate_assignment=True.
+        return type(self).model_validate(merged_data, by_name=True, by_alias=True)
 
     @classmethod
     def from_response(cls, response: Dict[str, Any]) -> "VpcPairModel":

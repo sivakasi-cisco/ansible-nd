@@ -588,9 +588,10 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 f"{str(list_error).splitlines()[0]}."
             )
 
-        # Lightweight path for read-only and delete workflows.
-        # Keep heavy discovery/enrichment only for write states.
-        if state in ("deleted", "gathered"):
+        # Lightweight path for gathered and targeted delete workflows.
+        # For delete-all (state=deleted with empty config), use full switch-level
+        # discovery so stale/lagging list responses do not miss active pairs.
+        if state == "gathered" or (state == "deleted" and bool(config)):
             if list_query_succeeded:
                 if state == "deleted" and config and not have:
                     fallback_have = []
