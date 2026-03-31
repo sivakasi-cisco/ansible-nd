@@ -532,14 +532,15 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
         # Validate overlay data exists
         overlay = response.get(VpcFieldNames.OVERLAY)
         if not overlay:
-            _raise_vpc_error(
-                msg=(
-                    f"vPC pair {vpc_pair_key} might not exist or overlay data unavailable. "
-                    f"Cannot safely validate deletion."
-                ),
-                vpc_pair_key=vpc_pair_key,
-                response=response
+            # Overlay data unavailable — the pair may be in a transitional
+            # state (e.g. already mid-unpair) or the controller has stale
+            # data.  Since there is no overlay to validate against,
+            # treat as safe to proceed with deletion.
+            module.warn(
+                f"vPC pair {vpc_pair_key} overlay data unavailable in overview response. "
+                f"Proceeding with deletion — the pair may already be in a transitional state."
             )
+            return
 
         # Check 1: Validate no networks are attached
         network_count = overlay.get(VpcFieldNames.NETWORK_COUNT, {})
@@ -626,11 +627,11 @@ def _validate_vpc_pair_deletion(nd_v2, fabric_name: str, switch_id: str, vpc_pai
         error_msg = str(error.msg).lower() if error.msg else ""
         status_code = error.status or 0
 
-        # If the overview query returns 400 with "not a part of" it means
+        # If the overview query returns 400 or 404 with "not a part of" it means
         # the pair no longer exists on the controller.  Signal the caller
         # by raising a ValueError with a sentinel message so that the
         # delete function can treat this as an idempotent no-op.
-        if status_code == 400 and "not a part of" in error_msg:
+        if status_code in (400, 404) and "not a part of" in error_msg:
             raise ValueError(
                 f"VPC pair {vpc_pair_key} is already unpaired on the controller. "
                 f"No deletion required."

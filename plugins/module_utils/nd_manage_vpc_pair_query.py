@@ -646,16 +646,18 @@ def custom_vpc_query_all(nrm) -> List[Dict]:
                 else:
                     return _set_lightweight_context(have)
 
-            nrm.module.warn(
-                "Skipping switch-level discovery for read-only/delete workflow because "
-                "the vPC list endpoint is unavailable."
-            )
+            if not list_query_succeeded:
+                nrm.module.warn(
+                    "Skipping switch-level discovery for read-only/delete workflow because "
+                    "the vPC list endpoint is unavailable."
+                )
 
             if state == "gathered":
-                nrm.module.warn(
-                    "vPC list endpoint unavailable for gathered workflow. "
-                    "Falling back to switch-level discovery."
-                )
+                if not list_query_succeeded:
+                    nrm.module.warn(
+                        "vPC list endpoint unavailable for gathered workflow. "
+                        "Falling back to switch-level discovery."
+                    )
             else:
                 # Preserve explicit delete intent without full-fabric discovery.
                 # This keeps delete deterministic and avoids expensive inventory calls.

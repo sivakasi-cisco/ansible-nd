@@ -431,7 +431,8 @@ def custom_vpc_delete(nrm) -> bool:
 
         # Idempotent handling: if the API says the switch is not part of any
         # vPC pair, the pair is already gone — treat as a successful no-op.
-        if status_code == 400 and "not a part of" in error_msg:
+        # The API may return 400 or 404 depending on the ND version.
+        if status_code in (400, 404) and "not a part of" in error_msg:
             # Keep idempotent semantics: this is a no-op delete, so downgrade the
             # pre-logged operation from "deleted" to "no_change".
             if getattr(nrm, "logs", None):

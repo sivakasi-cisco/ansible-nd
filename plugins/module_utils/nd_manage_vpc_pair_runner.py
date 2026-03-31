@@ -10,17 +10,13 @@ from typing import Any, Dict
 from ansible_collections.cisco.nd.plugins.module_utils.manage_vpc_pair.enums import (
     VpcFieldNames,
 )
-from ansible_collections.cisco.nd.plugins.module_utils.nd_manage_vpc_pair_common import (
-    _collection_to_list_flex,
-)
 
 def run_vpc_module(nrm) -> Dict[str, Any]:
     """
     Run VPC module state machine with VPC-specific gathered output.
 
     Top-level state router. For gathered: builds read-only output filtering out
-    pending-delete pairs. For deleted/overridden with empty config: synthesizes
-    explicit delete intents. Otherwise delegates to nrm.manage_state().
+    pending-delete pairs. Otherwise delegates to nrm.manage_state().
 
     Args:
         nrm: VpcPairStateMachine instance
@@ -72,38 +68,13 @@ def run_vpc_module(nrm) -> Dict[str, Any]:
             )
         return nrm.result
 
-    # state=deleted with empty config means "delete all existing pairs in this fabric".
-    #
-    # state=overridden with empty config has the same user intent (TC4):
-    # remove all existing pairs from this fabric.
     if state in ("deleted", "overridden") and not config:
-        # Use the live existing collection from NDStateMachine.
-        # nrm.result["current"] is only populated after add_logs_and_outputs(), so relying on
-        # it here would incorrectly produce an empty delete list.
-        existing_pairs = _collection_to_list_flex(getattr(nrm, "existing", None))
-        if not existing_pairs:
-            existing_pairs = nrm.result.get("current", []) or []
-
-        delete_all_config = []
-        for pair in existing_pairs:
-            switch_id = pair.get(VpcFieldNames.SWITCH_ID) or pair.get("switch_id")
-            peer_switch_id = pair.get(VpcFieldNames.PEER_SWITCH_ID) or pair.get("peer_switch_id")
-            if switch_id and peer_switch_id:
-                use_vpl = pair.get(VpcFieldNames.USE_VIRTUAL_PEER_LINK)
-                if use_vpl is None:
-                    use_vpl = pair.get("use_virtual_peer_link", True)
-                delete_all_config.append(
-                    {
-                        "switch_id": switch_id,
-                        "peer_switch_id": peer_switch_id,
-                        "use_virtual_peer_link": use_vpl,
-                    }
-                )
-        config = delete_all_config
-        # Force explicit delete operations instead of relying on overridden-state
-        # reconciliation behavior with empty desired config.
-        if state == "overridden":
-            state = "deleted"
+        module = nrm.module
+        module.fail_json(
+            msg="Config parameter is required for state '%s'. "
+            "Specify the vPC pair(s) to %s using the config parameter."
+            % (state, "delete" if state == "deleted" else "override"),
+        )
 
     nrm.manage_state(state=state, new_configs=config)
     nrm.add_logs_and_outputs()
