@@ -1,0 +1,48 @@
+---
+- name: "{{ vpc_pair_wait_context }} - Wait for the requested vPC pair state"
+  cisco.nd.nd_manage_vpc_pair:
+    output_level: "{{ api_key_output_level | default('debug') }}"
+    fabric_name: "{{ test_fabric }}"
+    state: gathered
+    config_actions:
+      save: false
+      deploy: false
+      type: switch
+    config:
+      - peer1_switch_id: "{{ test_switch1 }}"
+        peer2_switch_id: "{{ test_switch2 }}"
+  register: vpc_pair_wait_result
+  vars:
+    vpc_pair_wait_timeout: "{{ nd_vpc_pair_sync_wait_timeout | default(300) | int }}"
+    vpc_pair_wait_interval: "{{ [1, (nd_vpc_pair_sync_poll_interval | default(20) | int)] | max }}"
+  until:
+    - vpc_pair_wait_result.failed == false
+    - >-
+      (
+        (
+          (
+            (vpc_pair_wait_result.gathered | default({})).vpc_pairs | default([])
+            | selectattr('switch_id', 'equalto', test_switch1)
+            | selectattr('peer_switch_id', 'equalto', test_switch2)
+            | list | length
+          ) > 0
+          or
+          (
+            (vpc_pair_wait_result.gathered | default({})).vpc_pairs | default([])
+            | selectattr('switch_id', 'equalto', test_switch2)
+            | selectattr('peer_switch_id', 'equalto', test_switch1)
+            | list | length
+          ) > 0
+        ) == (vpc_pair_expected_present | bool)
+      )
+  retries: >-
+    {{
+      [
+        1,
+        (
+          ((vpc_pair_wait_timeout | int) + (vpc_pair_wait_interval | int) - 1)
+          // (vpc_pair_wait_interval | int)
+        ),
+      ] | max
+    }}
+  delay: "{{ [1, (nd_vpc_pair_sync_poll_interval | default(20) | int)] | max }}"
